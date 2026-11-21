@@ -3,7 +3,7 @@
   "id": "baritone",
   "version": "${version}",
 
-  "name": "Baritone",
+  "name": "BetterBaritone",
   "description": "Google Maps for Blockgame",
   "authors": [
     "leijurv", "Brady"

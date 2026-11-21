@@ -18,6 +18,7 @@
 package baritone.command.defaults;
 
 import baritone.Baritone;
+import baritone.process.elytra.ElytraFlightScreen;
 import baritone.api.IBaritone;
 import baritone.api.command.Command;
 import baritone.api.command.argument.IArgConsumer;
@@ -51,6 +52,14 @@ public class ElytraCommand extends Command {
     public void execute(String label, IArgConsumer args) throws CommandException {
         final ICustomGoalProcess customGoalProcess = baritone.getCustomGoalProcess();
         final IElytraProcess elytra = baritone.getElytraProcess();
+        if (args.hasExactlyOne() && args.peekString().equals("panel")) {
+            ctx.minecraft().execute(() -> ctx.minecraft().setScreen(new ElytraFlightScreen()));
+            return;
+        }
+        if (args.hasExactlyOne() && args.peekString().equals("settings")) {
+            ctx.minecraft().execute(() -> ctx.minecraft().setScreen(new ElytraFlightScreen(ElytraFlightScreen.Page.KEYS)));
+            return;
+        }
         if (args.hasExactlyOne() && args.peekString().equals("supported")) {
             logDirect(elytra.isLoaded() ? "yes" : unsupportedSystemMessage());
             return;
@@ -189,7 +198,7 @@ public class ElytraCommand extends Command {
     public Stream<String> tabComplete(String label, IArgConsumer args) throws CommandException {
         TabCompleteHelper helper = new TabCompleteHelper();
         if (args.hasExactlyOne()) {
-            helper.append("reset", "repack", "supported");
+            helper.append("reset", "repack", "supported", "settings", "panel");
         }
         return helper.filterPrefix(args.getString()).stream();
     }
@@ -208,6 +217,8 @@ public class ElytraCommand extends Command {
                 "> elytra - fly to the current goal",
                 "> elytra reset - Resets the state of the process, but will try to keep flying to the same goal.",
                 "> elytra repack - Queues all of the chunks in render distance to be given to the native library.",
+                "> elytra panel - Set a flight destination and view estimates.",
+                "> elytra settings - Open flight display and shortcut settings.",
                 "> elytra supported - Tells you if baritone ships a native library that is compatible with your PC."
         );
     }

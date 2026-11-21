@@ -32,6 +32,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
 
+import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -1441,7 +1442,7 @@ public final class Settings {
     public final Setting<Integer> elytraPitchRange = new Setting<>(25);
 
     /**
-     * The minimum speed that the player can drop to (in blocks/tick) before a firework is automatically deployed.
+     * Speed threshold in blocks per tick below which the flight controller considers deploying a firework.
      */
     public final Setting<Double> elytraFireworkSpeed = new Setting<>(1.2);
 
@@ -1479,6 +1480,21 @@ public final class Settings {
      * Renders the best elytra flight path that was simulated each tick.
      */
     public final Setting<Boolean> elytraRenderSimulation = new Setting<>(true);
+
+    public final Setting<Boolean> elytraRenderRoute = new Setting<>(true);
+    public final Setting<Boolean> elytraRenderAim = new Setting<>(false);
+    public final Setting<Boolean> elytraRenderThroughWalls = new Setting<>(false);
+    public final Setting<Integer> elytraSettingsKey = new Setting<>(GLFW.GLFW_KEY_F6);
+    public final Setting<Integer> elytraTakeoverKey = new Setting<>(-1);
+    public final Setting<Integer> elytraPauseKey = new Setting<>(GLFW.GLFW_KEY_U);
+    public final Setting<Integer> elytraLandKey = new Setting<>(-1);
+    public final Setting<Boolean> elytraRefillHotbar = new Setting<>(true);
+    public final Setting<Boolean> elytraDarkTheme = new Setting<>(false);
+    public final Setting<Boolean> elytraUseTenThousands = new Setting<>(true);
+    public final Setting<Boolean> elytraFlightHud = new Setting<>(true);
+    public final Setting<Boolean> elytraSupplyAlertSound = new Setting<>(true);
+    public final Setting<Integer> elytraRocketSlot = new Setting<>(9);
+    public final Setting<Integer> elytraFoodSlot = new Setting<>(6);
 
     /**
      * Automatically path to and jump off of ledges to initiate elytra flight when grounded.

@@ -24,6 +24,7 @@ import baritone.api.event.events.TickEvent;
 import baritone.api.event.events.WorldEvent;
 import baritone.api.event.events.type.EventState;
 import net.minecraft.client.Minecraft;
+import baritone.process.elytra.ElytraKeybinds;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
@@ -45,6 +46,8 @@ import java.util.function.BiFunction;
  */
 @Mixin(Minecraft.class)
 public class MixinMinecraft {
+    @Unique
+    private final ElytraKeybinds baritone$elytraKeybinds = new ElytraKeybinds();
 
     @Shadow
     public LocalPlayer player;
@@ -80,6 +83,7 @@ public class MixinMinecraft {
             )
     )
     private void runTick(CallbackInfo ci) {
+        this.baritone$elytraKeybinds.tick((Minecraft) (Object) this);
         this.tickProvider = TickEvent.createNextProvider();
 
         for (IBaritone baritone : BaritoneAPI.getProvider().getAllBaritones()) {

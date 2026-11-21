@@ -63,6 +63,10 @@ public final class LookBehavior extends Behavior implements ILookBehavior {
         this.smoothPitchBuffer = new ArrayDeque<>();
     }
 
+    public void clearTarget() {
+        this.target = null;
+    }
+
     @Override
     public void updateTarget(Rotation rotation, boolean blockInteract) {
         this.target = new Target(rotation, Target.Mode.resolve(ctx, blockInteract));

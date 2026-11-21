@@ -34,6 +34,7 @@ import baritone.utils.accessor.IFireworkRocketEntity;
 import com.mojang.blaze3d.vertex.BufferBuilder;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.floats.FloatIterator;
+import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.NonNullList;
 import net.minecraft.core.component.DataComponents;
@@ -102,6 +103,9 @@ public final class ElytraBehavior implements Helper {
     private int minimumBoostTicks;
 
     private boolean deployedFireworkLastTick;
+    private int refillCooldown;
+    private int rocketAckTicks;
+    private int rocketsBeforeUse;
     private final int[] nextTickBoostCounter;
 
     private BlockStateInterface bsi;
@@ -275,7 +279,7 @@ public final class ElytraBehavior implements Helper {
                     path.add(new BetterBlockPos(dest));
                 } else {
                     logDirect("unable to land at " + ElytraBehavior.this.destination);
-                    process.landingSpotIsBad(new BetterBlockPos(ElytraBehavior.this.destination));
+                    process.landingSpotIsBad(ElytraBehavior.this, new BetterBlockPos(ElytraBehavior.this.destination));
                 }
             }
             this.path = new NetherPath(path);
@@ -417,10 +421,10 @@ public final class ElytraBehavior implements Helper {
     public void onRenderPass(RenderEvent event) {
 
         final Settings settings = Baritone.settings();
-        if (this.visiblePath != null) {
-            PathRenderer.drawPath(event.getModelViewStack(), this.visiblePath, 0, Color.RED, false, 0, 0, 0.0D);
+        if (this.visiblePath != null && settings.elytraRenderRoute.value) {
+            PathRenderer.drawPath(event.getModelViewStack(), this.visiblePath, 0, new Color(0xF27DB2), settings.elytraRenderThroughWalls.value, 0, 0, 0.0D);
         }
-        if (this.aimPos != null) {
+        if (this.aimPos != null && settings.elytraRenderAim.value) {
             PathRenderer.drawGoal(event.getModelViewStack(), ctx, new GoalBlock(this.aimPos), event.getPartialTicks(), Color.GREEN);
         }
         if (!this.clearLines.isEmpty() && settings.elytraRenderRaytraces.value) {
@@ -438,7 +442,7 @@ public final class ElytraBehavior implements Helper {
             IRenderer.endLines(bufferBuilder, settings.renderPathIgnoreDepth.value);
         }
         if (this.simulationLine != null && Baritone.settings().elytraRenderSimulation.value) {
-            BufferBuilder bufferBuilder = IRenderer.startLines(new Color(0x36CCDC));
+            BufferBuilder bufferBuilder = IRenderer.startLines(new Color(0x58C9D6));
             final Vec3 offset = ctx.player().getPosition(event.getPartialTicks());
             for (int i = 0; i < this.simulationLine.size() - 1; i++) {
                 final Vec3 src = this.simulationLine.get(i).add(offset);
@@ -511,9 +515,9 @@ public final class ElytraBehavior implements Helper {
         }
     }
 
-    public void onTick() {
+    public void onTick(boolean updatePath) {
         synchronized (this.context.cullingLock) {
-            this.onTick0();
+            this.onTick0(updatePath);
         }
         final long now = System.currentTimeMillis();
         if ((now - this.timeLastCacheCull) / 1000 > Baritone.settings().elytraTimeBetweenCacheCullSecs.value) {
@@ -522,7 +526,7 @@ public final class ElytraBehavior implements Helper {
         }
     }
 
-    private void onTick0() {
+    private void onTick0(boolean updatePath) {
         // Fetch the previous solution, regardless of if it's going to be used
         this.pendingSolution = null;
         if (this.solver != null) {
@@ -536,6 +540,8 @@ public final class ElytraBehavior implements Helper {
         }
 
         tickInventoryTransactions();
+        refillHotbar();
+        checkRocketUse();
 
         // Certified mojang employee incident
         if (this.remainingFireworkTicks > 0) {
@@ -555,6 +561,9 @@ public final class ElytraBehavior implements Helper {
         this.simulationLine = null;
         this.aimPos = null;
 
+        if (!updatePath) {
+            return;
+        }
         final List<BetterBlockPos> path = this.pathManager.getPath();
         if (path.isEmpty()) {
             return;
@@ -578,7 +587,7 @@ public final class ElytraBehavior implements Helper {
      * Called by {@link baritone.process.ElytraProcess#onTick(boolean, boolean)} when the process is in control and the player is flying
      */
     public void tick() {
-        if (this.pathManager.getPath().isEmpty()) {
+        if (this.bsi == null || this.pathManager.getPath().isEmpty()) {
             return;
         }
 
@@ -755,18 +764,58 @@ public final class ElytraBehavior implements Helper {
                 && (ctx.player().position().y < goingTo.y - 5 || start.distanceTo(new Vec3(goingTo.x + 0.5, ctx.player().position().y, goingTo.z + 0.5)) > 5) // UGH!!!!!!!
                 && currentSpeed < elytraFireworkSpeed * elytraFireworkSpeed))
         ) {
-            // Prioritize boosting fireworks over regular ones
-            // TODO: Take the minimum boost time into account?
-            if (!baritone.getInventoryBehavior().throwaway(true, ElytraBehavior::isBoostingFireworks) &&
-                    !baritone.getInventoryBehavior().throwaway(true, ElytraBehavior::isFireworks)) {
+            if (!useFirework(forceUseFirework, false)) {
                 logDirect("no fireworks");
-                return;
             }
-            logVerbose("attempting to use firework" + (forceUseFirework ? " (forced)" : ""));
-            ctx.playerController().processRightClick(ctx.player(), ctx.world(), InteractionHand.MAIN_HAND);
-            this.minimumBoostTicks = 10 * (1 + getFireworkBoost(ctx.player().getItemInHand(InteractionHand.MAIN_HAND)).orElse(0));
-            this.remainingFireworkTicks = 10;
-            this.deployedFireworkLastTick = true;
+        }
+    }
+
+    public boolean useLaunchFirework() {
+        if (this.remainingFireworkTicks > 0 || this.remainingSetBackTicks > 0
+                || !useFirework(true, true)) {
+            return false;
+        }
+        this.process.traceFlight("launch-rocket-request", this.destination);
+        return true;
+    }
+
+    private boolean useFirework(boolean forced, boolean launching) {
+        if (!baritone.getInventoryBehavior().throwaway(true, ElytraBehavior::isBoostingFireworks)
+                && !baritone.getInventoryBehavior().throwaway(true, ElytraBehavior::isFireworks)) {
+            return false;
+        }
+        InteractionHand hand = InteractionHand.MAIN_HAND;
+        if (launching && !isFireworks(ctx.player().getMainHandItem())) {
+            if (!isFireworks(ctx.player().getOffhandItem())) {
+                return false;
+            }
+            hand = InteractionHand.OFF_HAND;
+        }
+        logVerbose("attempting to use firework" + (forced ? " (forced)" : ""));
+        int before = this.process.availableRockets();
+        int duration = getFireworkBoost(ctx.player().getItemInHand(hand)).orElse(0);
+        var result = ctx.playerController().processRightClick(ctx.player(), ctx.world(), hand);
+        if (launching && !result.consumesAction()) {
+            return false;
+        }
+        this.rocketsBeforeUse = before;
+        this.rocketAckTicks = 10;
+        this.minimumBoostTicks = 10 * (1 + duration);
+        this.remainingFireworkTicks = 10;
+        this.deployedFireworkLastTick = true;
+        this.process.traceFlight("rocket-use-sent", this.destination);
+        return true;
+    }
+
+    private void checkRocketUse() {
+        if (this.rocketAckTicks <= 0) {
+            return;
+        }
+        if (this.process.availableRockets() < this.rocketsBeforeUse) {
+            this.rocketAckTicks = 0;
+            this.process.onRocketUsed();
+        } else if (--this.rocketAckTicks == 0) {
+            this.process.traceFlight("rocket-unconfirmed", this.destination);
         }
     }
 
@@ -1270,6 +1319,59 @@ public final class ElytraBehavior implements Helper {
         } else {
             return !this.boi.get0(x, y, z);
         }
+    }
+
+    private int hotbarIndex(int slot) {
+        return Math.clamp(slot, 1, 9) - 1;
+    }
+
+    private void refillHotbar() {
+        if (this.refillCooldown > 0) {
+            this.refillCooldown--;
+            return;
+        }
+        if (!Baritone.settings().elytraRefillHotbar.value || !this.invTransactionQueue.isEmpty()
+                || this.invTickCountdown > 0 || ctx.player().isUsingItem()
+                || ctx.player().containerMenu != ctx.player().inventoryMenu
+                || !ctx.player().inventoryMenu.getCarried().isEmpty()
+                || (ctx.minecraft().screen != null && !(ctx.minecraft().screen instanceof ChatScreen))) {
+            return;
+        }
+        int rocketSlot = hotbarIndex(Baritone.settings().elytraRocketSlot.value);
+        int foodSlot = hotbarIndex(Baritone.settings().elytraFoodSlot.value);
+        if (refillSlot(rocketSlot, true) || (foodSlot != rocketSlot && refillSlot(foodSlot, false))) {
+            this.refillCooldown = Math.max(4, Baritone.settings().ticksBetweenInventoryMoves.value);
+        }
+    }
+
+    private boolean refillSlot(int target, boolean rocket) {
+        NonNullList<ItemStack> inventory = ctx.player().getInventory().getNonEquipmentItems();
+        if (!inventory.get(target).isEmpty()) {
+            return false;
+        }
+        int source = -1;
+        int bestScore = 0;
+        for (int i = 9; i < 36; i++) {
+            ItemStack item = inventory.get(i);
+            boolean matches = rocket ? isFireworks(item) : item.has(DataComponents.FOOD) && item.has(DataComponents.CONSUMABLE);
+            if (!matches || item.isEmpty()) {
+                continue;
+            }
+            int score = item.getCount();
+            if (rocket && getFireworkBoost(item).orElse(0) == 3) {
+                score += 128;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                source = i;
+            }
+        }
+        if (source < 0) {
+            return false;
+        }
+        ctx.playerController().windowClick(ctx.player().inventoryMenu.containerId, source, target,
+                ClickType.SWAP, ctx.player());
+        return true;
     }
 
     private void tickInventoryTransactions() {
