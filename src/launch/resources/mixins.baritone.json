@@ -17,6 +17,7 @@
     "MixinEntityRenderManager",
     "MixinFireworkRocketEntity",
     "MixinGui",
+    "MixinElytraOnPlayerSoundInstance",
     "MixinItemStack",
     "MixinLivingEntity",
     "MixinLootContextBuilder",

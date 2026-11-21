@@ -1482,6 +1482,8 @@ public final class Settings {
     public final Setting<Boolean> elytraRenderSimulation = new Setting<>(true);
 
     public final Setting<Boolean> elytraRenderRoute = new Setting<>(true);
+    public final Setting<Color> elytraRouteColor = new Setting<>(new Color(0xF27DB2));
+    public final Setting<Color> elytraSimulationColor = new Setting<>(new Color(0x58C9D6));
     public final Setting<Boolean> elytraRenderAim = new Setting<>(false);
     public final Setting<Boolean> elytraRenderThroughWalls = new Setting<>(false);
     public final Setting<Integer> elytraSettingsKey = new Setting<>(GLFW.GLFW_KEY_F6);
@@ -1492,6 +1494,12 @@ public final class Settings {
     public final Setting<Boolean> elytraDarkTheme = new Setting<>(false);
     public final Setting<Boolean> elytraUseTenThousands = new Setting<>(true);
     public final Setting<Boolean> elytraFlightHud = new Setting<>(true);
+    public final Setting<Boolean> elytraEnglishUi = new Setting<>(false);
+    public final Setting<Boolean> elytraMuteGlideSound = new Setting<>(false);
+    public final Setting<Integer> elytraHudAnchor = new Setting<>(4);
+    public final Setting<Integer> elytraHudOffsetX = new Setting<>(0);
+    public final Setting<Integer> elytraHudOffsetY = new Setting<>(31);
+    public final Setting<Integer> elytraHudStyle = new Setting<>(0);
     public final Setting<Boolean> elytraSupplyAlertSound = new Setting<>(true);
     public final Setting<Integer> elytraRocketSlot = new Setting<>(9);
     public final Setting<Integer> elytraFoodSlot = new Setting<>(6);

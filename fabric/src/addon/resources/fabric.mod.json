@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "betterbaritone",
+  "version": "${version}",
+  "name": "BetterBaritone Add-on",
+  "description": "Elytra controls, HUD and flight statistics for Baritone on Minecraft 1.21.11.",
+  "environment": "client",
+  "license": "LGPL-3.0",
+  "contact": {
+    "sources": "https://github.com/Duuuuiiii/BetterBaritone",
+    "issues": "https://github.com/Duuuuiiii/BetterBaritone/issues"
+  },
+  "mixins": ["mixins.betterbaritone-addon.json", "mixins.betterbaritone-ui.json"],
+  "depends": {
+    "fabricloader": ">=0.18.4",
+    "minecraft": "1.21.11",
+    "baritone": "1.17.0",
+    "java": ">=21"
+  }
+}

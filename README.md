@@ -1,4 +1,23 @@
-# Baritone
+# BetterBaritone
+
+Minecraft **1.21.11 · Fabric · Java 21**. 按 **F6** 打开飞行界面，按 **U** 暂停或恢复。默认中文，右上角 **CN / EN** 切换。HUD 页提供极简样式、位置和偏移，航线显示页可以分别设置两条线的开关、预设和自定义颜色。
+
+## 安装 / Install
+
+| 下载 / Download | 安装方式 / Install alongside |
+| --- | --- |
+| `BetterBaritone-Addon-0.1.9.jar` | 和官方 **`baritone-unoptimized-fabric-1.17.0.jar`** 一起放进 `mods`。需要 Fabric Loader 0.18.4 或更新版本。 / Install both JARs in `mods` with Fabric Loader 0.18.4 or newer. |
+| `BetterBaritone-0.1.9.jar` | 完整替换版。先把原 Baritone 移出 `mods`，再放入此文件。 / Remove other Baritone JARs from `mods` before installing this replacement. |
+
+附加版使用官方 v1.17.0 的飞行寻路。官方 `standalone`、`api` 和内置 Baritone 的客户端属于未支持的组合。已安装其中一种时，先换成 `unoptimized`。完整替换版包含本项目的地狱脱困、实际距离到达判断和诊断日志。
+
+The add-on uses upstream v1.17.0 flight routing. Use the exact `unoptimized` JAR above. The `standalone`, `api`, and client-bundled variants are unsupported. The replacement build includes the project's custom Nether recovery, arrival checks, and diagnostics.
+
+[BetterBaritone releases](https://github.com/Duuuuiiii/BetterBaritone/releases) · [Official Baritone v1.17.0](https://github.com/cabaletta/baritone/releases/tag/v1.17.0)
+
+Build both JARs with `./gradlew test :fabric:addonJar -Pavailable_loaders=fabric`. Outputs are in `fabric/build/libs`.
+
+## Upstream Baritone
 <p align="center">
   <a href="https://github.com/cabaletta/baritone/releases/"><img src="https://img.shields.io/github/downloads/cabaletta/baritone/total.svg" alt="GitHub All Releases"/></a>
 </p>

@@ -33,6 +33,16 @@ public class ElytraFlightStatsTest {
     public final TemporaryFolder folder = new TemporaryFolder();
 
     @Test
+    public void formatsRocketEstimateInShulkerBoxesAndStacks() {
+        assertEquals("飞行数据不足", ElytraFlightScreen.rocketAmount(-1, false));
+        assertEquals("0 个", ElytraFlightScreen.rocketAmount(0, false));
+        assertEquals("63 个", ElytraFlightScreen.rocketAmount(63, false));
+        assertEquals("1 组", ElytraFlightScreen.rocketAmount(64, false));
+        assertEquals("1 盒", ElytraFlightScreen.rocketAmount(1728, false));
+        assertEquals("1 盒 2 组 12 个", ElytraFlightScreen.rocketAmount(1868, false));
+    }
+
+    @Test
     public void estimateUsesNetProgressAndConsumption() {
         ElytraFlightStats stats = new ElytraFlightStats();
         stats.tick(0, 1_000, 400);

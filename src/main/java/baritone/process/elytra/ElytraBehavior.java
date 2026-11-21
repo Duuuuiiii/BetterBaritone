@@ -176,7 +176,16 @@ public final class ElytraBehavior implements Helper {
             return this.pathToDestination(ctx.playerFeet());
         }
 
+        public boolean retryDestination() {
+            if (this.recalculating) {
+                return false;
+            }
+            this.pathToDestination();
+            return true;
+        }
+
         public CompletableFuture<Void> pathToDestination(final BlockPos from) {
+            this.recalculating = true;
             final long start = System.nanoTime();
             return this.path0(from, ElytraBehavior.this.destination, UnaryOperator.identity())
                     .thenRun(() -> {
@@ -422,7 +431,7 @@ public final class ElytraBehavior implements Helper {
 
         final Settings settings = Baritone.settings();
         if (this.visiblePath != null && settings.elytraRenderRoute.value) {
-            PathRenderer.drawPath(event.getModelViewStack(), this.visiblePath, 0, new Color(0xF27DB2), settings.elytraRenderThroughWalls.value, 0, 0, 0.0D);
+            PathRenderer.drawPath(event.getModelViewStack(), this.visiblePath, 0, settings.elytraRouteColor.value, settings.elytraRenderThroughWalls.value, 0, 0, 0.0D);
         }
         if (this.aimPos != null && settings.elytraRenderAim.value) {
             PathRenderer.drawGoal(event.getModelViewStack(), ctx, new GoalBlock(this.aimPos), event.getPartialTicks(), Color.GREEN);
@@ -442,7 +451,7 @@ public final class ElytraBehavior implements Helper {
             IRenderer.endLines(bufferBuilder, settings.renderPathIgnoreDepth.value);
         }
         if (this.simulationLine != null && Baritone.settings().elytraRenderSimulation.value) {
-            BufferBuilder bufferBuilder = IRenderer.startLines(new Color(0x58C9D6));
+            BufferBuilder bufferBuilder = IRenderer.startLines(settings.elytraSimulationColor.value);
             final Vec3 offset = ctx.player().getPosition(event.getPartialTicks());
             for (int i = 0; i < this.simulationLine.size() - 1; i++) {
                 final Vec3 src = this.simulationLine.get(i).add(offset);

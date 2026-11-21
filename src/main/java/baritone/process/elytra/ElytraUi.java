@@ -17,12 +17,12 @@
 
 package baritone.process.elytra;
 
-import baritone.Baritone;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.network.chat.Component;
@@ -31,7 +31,9 @@ import net.minecraft.network.chat.Style;
 import net.minecraft.resources.Identifier;
 import net.minecraft.sounds.SoundEvents;
 
-final class ElytraUi {
+public final class ElytraUi {
+    private static final Identifier ROUND_MASK = Identifier.fromNamespaceAndPath("betterbaritone", "textures/gui/round_mask.png");
+    private static final int MASK_SIZE = 256;
     private static final Style UI_TEXT = Style.EMPTY
             .withFont(new FontDescription.Resource(Identifier.fromNamespaceAndPath("betterbaritone", "ui")))
             .withoutShadow();
@@ -39,11 +41,15 @@ final class ElytraUi {
             0xFFF0EEEF, 0xFFE7E3E7, 0xFFEEE1EB, 0xFF8F386D, 0xFF312732, 0xFFFFFFFF);
     private static final Palette DARK = new Palette(0xFF202024, 0xFFF1EEF2, 0xFFB8B2BE,
             0xFF2D2C32, 0xFF3A3840, 0xFF483343, 0xFFF1A5D3, 0xFFE8CDE0, 0xFF2C202B);
-    private static double themeMix = Baritone.settings().elytraDarkTheme.value ? 1 : 0;
+    private static double themeMix = ElytraPanelOptions.get().elytraDarkTheme.get() ? 1 : 0;
     private static long previousFrame;
     private static double opacity = 1;
 
     private ElytraUi() {}
+
+    public static String text(String chinese, String english) {
+        return ElytraPanelOptions.get().elytraEnglishUi.get() ? english : chinese;
+    }
 
     static Component label(String text) {
         return Component.literal(text).setStyle(UI_TEXT);
@@ -60,7 +66,7 @@ final class ElytraUi {
     static void animateTheme(long now) {
         double elapsed = previousFrame == 0 ? 0.15 : Math.min(0.15, (now - previousFrame) / 1e9);
         previousFrame = now;
-        double target = Baritone.settings().elytraDarkTheme.value ? 1 : 0;
+        double target = ElytraPanelOptions.get().elytraDarkTheme.get() ? 1 : 0;
         themeMix += (target - themeMix) * (1 - Math.exp(-elapsed * 19));
     }
 
@@ -95,27 +101,26 @@ final class ElytraUi {
     }
 
     static void rounded(GuiGraphics graphics, int x, int y, int w, int h, int color, int radius) {
-        int r = Math.min(radius, Math.min(w, h) / 2);
-        if (w <= 0 || h <= 0) {
+        if (w <= 0 || h <= 0 || (color >>> 24) == 0) {
             return;
         }
-        graphics.fill(x, y + r, x + w, y + h - r, color);
-        for (int row = 0; row < r; row++) {
-            double dy = r - row - 0.5;
-            double edge = r - Math.sqrt(r * r - dy * dy);
-            int inset = (int) Math.ceil(edge);
-            drawEdgeRow(graphics, x, y + row, w, inset, edge, color);
-            drawEdgeRow(graphics, x, y + h - row - 1, w, inset, edge, color);
+        int r = Math.min(radius, Math.min(w, h) / 2);
+        if (r == 0) {
+            graphics.fill(x, y, x + w, y + h, color);
+            return;
         }
+        graphics.fill(x + r, y, x + w - r, y + h, color);
+        graphics.fill(x, y + r, x + r, y + h - r, color);
+        graphics.fill(x + w - r, y + r, x + w, y + h - r, color);
+        corner(graphics, x, y, r, 0, 0, color);
+        corner(graphics, x + w - r, y, r, MASK_SIZE / 2, 0, color);
+        corner(graphics, x, y + h - r, r, 0, MASK_SIZE / 2, color);
+        corner(graphics, x + w - r, y + h - r, r, MASK_SIZE / 2, MASK_SIZE / 2, color);
     }
 
-    private static void drawEdgeRow(GuiGraphics graphics, int x, int y, int w, int inset, double edge, int color) {
-        graphics.fill(x + inset, y, x + w - inset, y + 1, color);
-        if (inset > edge) {
-            int fringe = withOpacity(color, inset - edge);
-            graphics.fill(x + inset - 1, y, x + inset, y + 1, fringe);
-            graphics.fill(x + w - inset, y, x + w - inset + 1, y + 1, fringe);
-        }
+    private static void corner(GuiGraphics graphics, int x, int y, int radius, int u, int v, int color) {
+        graphics.blit(RenderPipelines.GUI_TEXTURED, ROUND_MASK, x, y, u, v, radius, radius,
+                MASK_SIZE / 2, MASK_SIZE / 2, MASK_SIZE, MASK_SIZE, color);
     }
 
     static void playFeedback(SoundManager sounds) {
@@ -162,13 +167,18 @@ final class ElytraUi {
         }
     }
 
-    static EditBox input(Font font, int x, int y, int width, Component label) {
-        EditBox field = new EditBox(font, x + 8, y + 8, width - 16, 12, label) {
+    static EditBox input(Font font, int x, int y, int width, Component label, String prefix) {
+        int prefixSpace = prefix.isEmpty() ? 0 : width(font, prefix) + 9;
+        EditBox field = new EditBox(font, x + 8 + prefixSpace, y + 8, width - 16 - prefixSpace, 12, label) {
             @Override
             public void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
                 Palette c = colors();
-                rounded(graphics, getX() - 8, getY() - 8, getWidth() + 16, 26,
+                int left = getX() - 8 - prefixSpace;
+                rounded(graphics, left, getY() - 8, getWidth() + 16 + prefixSpace, 26,
                         isFocused() ? c.hover : c.surface, 7);
+                if (!prefix.isEmpty()) {
+                    drawText(graphics, font, prefix, left + 8, getY(), c.muted());
+                }
                 setTextColor(c.text);
                 super.renderWidget(graphics, mouseX, mouseY, partialTick);
             }

@@ -74,6 +74,30 @@ remapJar {
     }
 }
 
+tasks.register("addonJar", Jar) {
+    dependsOn remapJar
+    archiveFileName.set("BetterBaritone-Addon-${betterBaritoneVersion}.jar")
+    destinationDirectory.set(layout.buildDirectory.dir("libs"))
+    from({ zipTree(remapJar.archiveFile.get().asFile) }) {
+        include 'baritone/launch/addon/**'
+        include 'baritone/launch/BetterBaritoneAddonCompatibility.class'
+        include 'baritone/launch/mixins/MixinGui.class', 'baritone/launch/mixins/MixinElytraOnPlayerSoundInstance.class'
+        include 'baritone/process/elytra/ElytraPanel*.class', 'baritone/process/elytra/ElytraUi*.class'
+        include 'baritone/process/elytra/ElytraFlightScreen*.class', 'baritone/process/elytra/ElytraFlightHud*.class'
+        include 'baritone/process/elytra/ElytraKeybinds*.class', 'baritone/process/elytra/ElytraMileage*.class'
+        include 'baritone/process/elytra/ElytraFlightStats*.class', 'baritone/process/elytra/ElytraFlightProfile*.class'
+        include 'baritone/process/elytra/AddonFlightState*.class'
+        include 'assets/betterbaritone/**', 'LICENSE*'
+        include 'mixins.baritone-refmap.json'
+        rename 'mixins.baritone-refmap.json', 'mixins.betterbaritone-refmap.json'
+    }
+    from('src/addon/resources') {
+        filesMatching('fabric.mod.json') { expand version: betterBaritoneVersion }
+    }
+    from(rootProject.file('LICENSE'))
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
 jar {
     archiveClassifier.set "dev"
 }

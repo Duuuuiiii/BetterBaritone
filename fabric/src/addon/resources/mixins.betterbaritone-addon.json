@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "package": "baritone.launch.addon",
+  "refmap": "mixins.betterbaritone-refmap.json",
+  "plugin": "baritone.launch.BetterBaritoneAddonCompatibility",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "MixinAddonClient",
+    "MixinAddonFlight",
+    "MixinAddonRendering"
+  ],
+  "injectors": { "defaultRequire": 1 }
+}

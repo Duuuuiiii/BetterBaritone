@@ -17,10 +17,7 @@
 
 package baritone.process.elytra;
 
-import baritone.Baritone;
 import baritone.api.BaritoneAPI;
-import baritone.api.Settings;
-import baritone.process.ElytraProcess;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.glfw.GLFW;
 
@@ -31,13 +28,13 @@ public final class ElytraKeybinds {
     private boolean pauseDown;
 
     public void tick(Minecraft client) {
-        Settings settings = Baritone.settings();
-        boolean open = down(client, settings.elytraSettingsKey.value);
-        boolean takeover = down(client, settings.elytraTakeoverKey.value);
-        boolean pause = down(client, settings.elytraPauseKey.value);
-        boolean land = down(client, settings.elytraLandKey.value);
+        ElytraPanelOptions settings = ElytraPanelOptions.get();
+        boolean open = down(client, settings.elytraSettingsKey.get());
+        boolean takeover = down(client, settings.elytraTakeoverKey.get());
+        boolean pause = down(client, settings.elytraPauseKey.get());
+        boolean land = down(client, settings.elytraLandKey.get());
         if (client.player != null && client.screen == null && client.isWindowActive()) {
-            if (BaritoneAPI.getProvider().getPrimaryBaritone().getElytraProcess() instanceof ElytraProcess process) {
+            if (BaritoneAPI.getProvider().getPrimaryBaritone().getElytraProcess() instanceof ElytraPanelFlight process) {
                 if (pause && !this.pauseDown) {
                     ElytraUi.playFeedback(client.getSoundManager());
                     process.toggleFlightPause();
