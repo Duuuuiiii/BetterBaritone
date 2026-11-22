@@ -57,10 +57,10 @@ public final class ElytraPanelOptions {
     public final Option<Boolean> elytraFlightHud = option("elytraFlightHud", true);
     public final Option<Boolean> elytraEnglishUi = option("elytraEnglishUi", false);
     public final Option<Boolean> elytraMuteGlideSound = option("elytraMuteGlideSound", false);
+    public final Option<Boolean> elytraMuteRocketSound = option("elytraMuteRocketSound", false);
     public final Option<Integer> elytraHudAnchor = option("elytraHudAnchor", 4);
     public final Option<Integer> elytraHudOffsetX = option("elytraHudOffsetX", 0);
-    public final Option<Integer> elytraHudOffsetY = option("elytraHudOffsetY", 31);
-    public final Option<Integer> elytraHudStyle = option("elytraHudStyle", 0);
+    public final Option<Integer> elytraHudOffsetY = option("elytraHudOffsetY", 0);
     public final Option<Boolean> elytraSupplyAlertSound = option("elytraSupplyAlertSound", true);
     public final Option<Integer> elytraRocketSlot = option("elytraRocketSlot", 9);
     public final Option<Integer> elytraFoodSlot = option("elytraFoodSlot", 6);

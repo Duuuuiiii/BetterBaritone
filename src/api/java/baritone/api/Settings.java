@@ -1496,9 +1496,10 @@ public final class Settings {
     public final Setting<Boolean> elytraFlightHud = new Setting<>(true);
     public final Setting<Boolean> elytraEnglishUi = new Setting<>(false);
     public final Setting<Boolean> elytraMuteGlideSound = new Setting<>(false);
+    public final Setting<Boolean> elytraMuteRocketSound = new Setting<>(false);
     public final Setting<Integer> elytraHudAnchor = new Setting<>(4);
     public final Setting<Integer> elytraHudOffsetX = new Setting<>(0);
-    public final Setting<Integer> elytraHudOffsetY = new Setting<>(31);
+    public final Setting<Integer> elytraHudOffsetY = new Setting<>(0);
     public final Setting<Integer> elytraHudStyle = new Setting<>(0);
     public final Setting<Boolean> elytraSupplyAlertSound = new Setting<>(true);
     public final Setting<Integer> elytraRocketSlot = new Setting<>(9);

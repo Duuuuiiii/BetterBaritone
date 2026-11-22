@@ -22,6 +22,7 @@ import baritone.api.process.IElytraProcess;
 import baritone.api.process.PathingCommand;
 import baritone.process.ElytraProcess;
 import baritone.process.elytra.AddonFlightState;
+import baritone.process.elytra.ElytraBehavior;
 import baritone.process.elytra.ElytraFlightStats;
 import baritone.process.elytra.ElytraMileage;
 import baritone.process.elytra.ElytraPanelFlight;
@@ -37,6 +38,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(value = ElytraProcess.class, remap = false)
 public abstract class MixinAddonFlight implements ElytraPanelFlight {
     @Shadow public ElytraProcess.State state;
+    @Shadow private ElytraBehavior behavior;
     @Unique private AddonFlightState betterBaritone$flight;
 
     @Unique private AddonFlightState betterBaritone$state() {
@@ -65,7 +67,11 @@ public abstract class MixinAddonFlight implements ElytraPanelFlight {
         if (BaritoneAPI.getProvider().getPrimaryBaritone().getElytraProcess() != (Object) this) {
             return;
         }
-        PathingCommand command = betterBaritone$state().tick(state == ElytraProcess.State.LANDING);
+        if (this.behavior == null) {
+            return;
+        }
+        PathingCommand command = betterBaritone$state().tick(state == ElytraProcess.State.LANDING,
+                this.behavior.pathManager.getPath(), this.behavior.pathManager::pathToDestination);
         if (command != null) {
             callback.setReturnValue(command);
         }
@@ -81,5 +87,6 @@ public abstract class MixinAddonFlight implements ElytraPanelFlight {
     @Override public String flightStatus() { return betterBaritone$state().status(); }
     @Override public ElytraFlightStats.Estimate flightEstimate() { return betterBaritone$state().estimateFlight(); }
     @Override public ElytraFlightStats.Estimate estimateForDistance(double distance) { return betterBaritone$state().estimate(distance); }
+    @Override public long flightRocketsUsed() { return betterBaritone$state().flightRocketsUsed(); }
     @Override public ElytraMileage mileage() { return betterBaritone$state().mileage(); }
 }

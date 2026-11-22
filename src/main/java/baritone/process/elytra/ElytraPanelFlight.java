@@ -32,5 +32,6 @@ public interface ElytraPanelFlight {
     String flightStatus();
     ElytraFlightStats.Estimate flightEstimate();
     ElytraFlightStats.Estimate estimateForDistance(double distance);
+    long flightRocketsUsed();
     ElytraMileage mileage();
 }

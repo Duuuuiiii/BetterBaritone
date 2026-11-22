@@ -54,7 +54,8 @@ import static baritone.api.pathing.movement.ActionCosts.COST_INF;
 public final class MineProcess extends BaritoneProcessHelper implements IMineProcess {
 
     private BlockOptionalMetaLookup filter;
-    private List<BlockPos> knownOreLocations;
+    // Tanghulu's mining mixin writes this field directly using the optimized Baritone name.
+    private List<BlockPos> a;
     private List<BlockPos> blacklist; // inaccessible
     private Map<BlockPos, Long> anticipatedDrops;
     private BlockPos branchPoint;
@@ -84,13 +85,13 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
             }
         }
         if (calcFailed) {
-            if (!knownOreLocations.isEmpty() && Baritone.settings().blacklistClosestOnFailure.value) {
+            if (!a.isEmpty() && Baritone.settings().blacklistClosestOnFailure.value) {
                 logDirect("Unable to find any path to " + filter + ", blacklisting presumably unreachable closest instance...");
                 if (Baritone.settings().notificationOnMineFail.value) {
                     logNotification("Unable to find any path to " + filter + ", blacklisting presumably unreachable closest instance...", true);
                 }
-                knownOreLocations.stream().min(Comparator.comparingDouble(ctx.playerFeet()::distSqr)).ifPresent(blacklist::add);
-                knownOreLocations.removeIf(blacklist::contains);
+                a.stream().min(Comparator.comparingDouble(ctx.playerFeet()::distSqr)).ifPresent(blacklist::add);
+                a.removeIf(blacklist::contains);
             } else {
                 logDirect("Unable to find any path to " + filter + ", canceling mine");
                 if (Baritone.settings().notificationOnMineFail.value) {
@@ -103,10 +104,10 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
 
         updateLoucaSystem();
         int mineGoalUpdateInterval = Baritone.settings().mineGoalUpdateInterval.value;
-        List<BlockPos> curr = new ArrayList<>(knownOreLocations);
+        List<BlockPos> curr = new ArrayList<>(a);
         if (mineGoalUpdateInterval != 0 && tickCount++ % mineGoalUpdateInterval == 0) { // big brain
             CalculationContext context = new CalculationContext(baritone, true);
-            Baritone.getExecutor().execute(() -> rescan(curr, context));
+            Baritone.getExecutor().execute(() -> a(curr, context));
         }
         if (Baritone.settings().legitMine.value) {
             if (!addNearby()) {
@@ -149,7 +150,7 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
     private void updateLoucaSystem() {
         Map<BlockPos, Long> copy = new HashMap<>(anticipatedDrops);
         ctx.getSelectedBlock().ifPresent(pos -> {
-            if (knownOreLocations.contains(pos)) {
+            if (a.contains(pos)) {
                 copy.put(pos, System.currentTimeMillis() + Baritone.settings().mineDropLoiterDurationMSThanksLouca.value);
             }
         });
@@ -180,13 +181,13 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
         }
 
         boolean legit = Baritone.settings().legitMine.value;
-        List<BlockPos> locs = knownOreLocations;
+        List<BlockPos> locs = a;
         if (!locs.isEmpty()) {
             CalculationContext context = new CalculationContext(baritone);
             List<BlockPos> locs2 = prune(context, new ArrayList<>(locs), filter, Baritone.settings().mineMaxOreLocationsCount.value, blacklist, droppedItemsScan());
             // can't reassign locs, gotta make a new var locs2, because we use it in a lambda right here, and variables you use in a lambda must be effectively final
             Goal goal = new GoalComposite(locs2.stream().map(loc -> coalesce(loc, locs2, context)).toArray(Goal[]::new));
-            knownOreLocations = locs2;
+            a = locs2;
             return new PathingCommand(goal, legit ? PathingCommandType.FORCE_REVALIDATE_GOAL_AND_PATH : PathingCommandType.REVALIDATE_GOAL_AND_PATH);
         }
         // we don't know any ore locations at the moment
@@ -223,6 +224,11 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
         return new PathingCommand(branchPointRunaway, PathingCommandType.REVALIDATE_GOAL_AND_PATH);
     }
 
+    // Tanghulu injects here to provide its own scan results.
+    private void a(List<BlockPos> already, CalculationContext context) {
+        rescan(already, context);
+    }
+
     private void rescan(List<BlockPos> already, CalculationContext context) {
         BlockOptionalMetaLookup filter = filterFilter();
         if (filter == null) {
@@ -242,7 +248,7 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
             cancel();
             return;
         }
-        knownOreLocations = locs;
+        a = locs;
     }
 
     private boolean internalMiningGoal(BlockPos pos, CalculationContext context, List<BlockPos> locs) {
@@ -396,7 +402,7 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
 
     private boolean addNearby() {
         List<BlockPos> dropped = droppedItemsScan();
-        knownOreLocations.addAll(dropped);
+        a.addAll(dropped);
         BlockPos playerFeet = ctx.playerFeet();
         BlockStateInterface bsi = new BlockStateInterface(ctx);
 
@@ -415,14 +421,14 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
                     // is an x-ray and it'll get caught
                     if (filter.has(bsi.get0(x, y, z))) {
                         BlockPos pos = new BlockPos(x, y, z);
-                        if ((Baritone.settings().legitMineIncludeDiagonals.value && knownOreLocations.stream().anyMatch(ore -> ore.distSqr(pos) <= 2 /* sq means this is pytha dist <= sqrt(2) */)) || RotationUtils.reachable(ctx, pos, fakedBlockReachDistance).isPresent()) {
-                            knownOreLocations.add(pos);
+                        if ((Baritone.settings().legitMineIncludeDiagonals.value && a.stream().anyMatch(ore -> ore.distSqr(pos) <= 2 /* sq means this is pytha dist <= sqrt(2) */)) || RotationUtils.reachable(ctx, pos, fakedBlockReachDistance).isPresent()) {
+                            a.add(pos);
                         }
                     }
                 }
             }
         }
-        knownOreLocations = prune(new CalculationContext(baritone), knownOreLocations, filter, Baritone.settings().mineMaxOreLocationsCount.value, blacklist, dropped);
+        a = prune(new CalculationContext(baritone), a, filter, Baritone.settings().mineMaxOreLocationsCount.value, blacklist, dropped);
         return true;
     }
 
@@ -440,7 +446,7 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
                 .distinct()
 
                 // remove any that are within loaded chunks that aren't actually what we want
-                .filter(pos -> !ctx.bsi.worldContainsLoadedChunk(pos.getX(), pos.getZ()) || filter.has(ctx.get(pos.getX(), pos.getY(), pos.getZ())) || dropped.contains(pos))
+                .filter(pos -> a(ctx, filter, dropped, pos))
 
                 // remove any that are implausible to mine (encased in bedrock, or touching lava)
                 .filter(pos -> MineProcess.plausibleToBreak(ctx, pos))
@@ -466,6 +472,13 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
             return locs.subList(0, max);
         }
         return locs;
+    }
+
+    // Keep the block filter call here so Tanghulu can wrap it.
+    private static boolean a(CalculationContext ctx, BlockOptionalMetaLookup filter, List<BlockPos> dropped, BlockPos pos) {
+        return !ctx.bsi.worldContainsLoadedChunk(pos.getX(), pos.getZ())
+                || filter.has(ctx.get(pos.getX(), pos.getY(), pos.getZ()))
+                || dropped.contains(pos);
     }
 
     public static boolean isNextToAir(CalculationContext ctx, BlockPos pos) {
@@ -509,13 +522,13 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
             this.filter = null;
         }
         this.desiredQuantity = quantity;
-        this.knownOreLocations = new ArrayList<>();
+        this.a = new ArrayList<>();
         this.blacklist = new ArrayList<>();
         this.branchPoint = null;
         this.branchPointRunaway = null;
         this.anticipatedDrops = new HashMap<>();
         if (filter != null) {
-            rescan(new ArrayList<>(), new CalculationContext(baritone));
+            a(new ArrayList<>(), new CalculationContext(baritone));
         }
     }
 

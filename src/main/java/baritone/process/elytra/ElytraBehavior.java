@@ -39,7 +39,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.NonNullList;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
-import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.projectile.FireworkRocketEntity;
@@ -92,6 +91,8 @@ public final class ElytraBehavior implements Helper {
      * Remaining cool-down ticks after the player's position and rotation are reset by the server
      */
     private int remainingSetBackTicks;
+    private int nextLavaDiagnostic;
+    private int nextLavaReplan;
 
     public boolean landingMode;
 
@@ -176,6 +177,10 @@ public final class ElytraBehavior implements Helper {
             return this.pathToDestination(ctx.playerFeet());
         }
 
+        public boolean isRecalculating() {
+            return this.recalculating;
+        }
+
         public boolean retryDestination() {
             if (this.recalculating) {
                 return false;
@@ -189,6 +194,9 @@ public final class ElytraBehavior implements Helper {
             final long start = System.nanoTime();
             return this.path0(from, ElytraBehavior.this.destination, UnaryOperator.identity())
                     .thenRun(() -> {
+                        if (this.path.isEmpty()) {
+                            return;
+                        }
                         final double distance = this.path.get(0).distanceTo(this.path.get(this.path.size() - 1));
                         if (this.completePath) {
                             logVerbose(String.format("Computed path (%.1f blocks in %.4f seconds)", distance, (System.nanoTime() - start) / 1e9d));
@@ -566,14 +574,11 @@ public final class ElytraBehavior implements Helper {
         // Reset rendered elements
         this.clearLines.clear();
         this.blockedLines.clear();
-        this.visiblePath = null;
         this.simulationLine = null;
         this.aimPos = null;
 
-        if (!updatePath) {
-            return;
-        }
         final List<BetterBlockPos> path = this.pathManager.getPath();
+        this.visiblePath = null;
         if (path.isEmpty()) {
             return;
         } else if (this.destination == null) {
@@ -581,9 +586,12 @@ public final class ElytraBehavior implements Helper {
             return;
         }
 
-        // ctx AND context???? :DDD
-        this.bsi = new BlockStateInterface(ctx);
-        this.pathManager.tick();
+        if (updatePath) {
+            this.bsi = new BlockStateInterface(ctx);
+            this.pathManager.tick();
+        } else {
+            this.pathManager.updatePlayerNear();
+        }
 
         final int playerNear = this.pathManager.getNear();
         this.visiblePath = path.subList(
@@ -596,6 +604,9 @@ public final class ElytraBehavior implements Helper {
      * Called by {@link baritone.process.ElytraProcess#onTick(boolean, boolean)} when the process is in control and the player is flying
      */
     public void tick() {
+        if (avoidLava(ctx.playerRotations(), null)) {
+            return;
+        }
         if (this.bsi == null || this.pathManager.getPath().isEmpty()) {
             return;
         }
@@ -635,6 +646,9 @@ public final class ElytraBehavior implements Helper {
             return;
         }
 
+        if (avoidLava(solution.rotation, ctx.playerRotations())) {
+            return;
+        }
         baritone.getLookBehavior().updateTarget(solution.rotation, false);
 
         if (!solution.solvedPitch) {
@@ -644,12 +658,66 @@ public final class ElytraBehavior implements Helper {
             this.aimPos = new BetterBlockPos(solution.goingTo.x, solution.goingTo.y, solution.goingTo.z);
         }
 
-        this.tickUseFireworks(
-                solution.context.start,
-                solution.goingTo,
-                solution.context.boost.isBoosted(),
-                solution.forceUseFirework || inLava
-        );
+        if (inLava || !this.process.launchIgnitionBlocked()) {
+            this.tickUseFireworks(solution.context.start, solution.goingTo,
+                    solution.context.boost.isBoosted(), solution.forceUseFirework || inLava);
+        }
+    }
+
+    private boolean avoidLava(Rotation heading, Rotation previous) {
+        if (ctx.player().onGround() && !ctx.player().isInLava()) {
+            return false;
+        }
+        // The second check validates only the solver's new heading. Skip duplicate predictions.
+        if (previous != null && Math.abs(heading.getPitch() - previous.getPitch()) < 1
+                && Math.abs(net.minecraft.util.Mth.wrapDegrees(heading.getYaw() - previous.getYaw())) < 1) {
+            return false;
+        }
+        var player = ctx.player();
+        int boostTicks = getAttachedFirework().map(rocket -> Math.max(1, minimumBoostTicks - rocket.tickCount + 8)).orElse(0);
+        if (!player.isInLava() && !ElytraLavaGuard.threatens(player, heading, boostTicks)) {
+            return false;
+        }
+        if (player.isInLava()) {
+            baritone.getInputOverrideHandler().setInputForceState(Input.JUMP, true);
+        }
+        boolean boost = boostTicks == 0 && remainingSetBackTicks <= 0 && rocketAckTicks == 0 && remainingFireworkTicks <= 0;
+        Rotation escape = ElytraLavaGuard.climb(player, heading, boost ? 18 : boostTicks);
+        if (escape != null && boost) {
+            Rotation actual = baritone.getLookBehavior().getAimProcessor().peekRotation(escape);
+            if (ElytraLavaGuard.canClimb(player, actual, 18) && useFirework(true, actual)) {
+                traceLavaAvoidance("lava-avoidance-boost");
+            } else {
+                escape = null;
+            }
+        }
+        if (escape == null && boost) {
+            escape = ElytraLavaGuard.climb(player, heading, 0);
+        }
+        if (escape == null) {
+            escape = ElytraLavaGuard.glideAside(player, heading, boostTicks);
+            if (escape == null) {
+                if (player.tickCount >= this.nextLavaReplan && this.pathManager.retryDestination()) {
+                    this.nextLavaReplan = player.tickCount + 100;
+                }
+                traceLavaAvoidance("lava-avoidance-held-replan");
+            } else {
+                baritone.getLookBehavior().updateTarget(escape, false);
+                traceLavaAvoidance("lava-avoidance-glide-aside");
+            }
+            return true;
+        }
+        baritone.getLookBehavior().updateTarget(escape, false);
+        traceLavaAvoidance("lava-avoidance-climb");
+        return true;
+    }
+
+    private void traceLavaAvoidance(String event) {
+        int tick = ctx.player().tickCount;
+        if (tick >= this.nextLavaDiagnostic) {
+            this.nextLavaDiagnostic = tick + 20;
+            this.process.traceFlight(event, this.destination);
+        }
     }
 
     public void onPostTick(TickEvent event) {
@@ -773,22 +841,23 @@ public final class ElytraBehavior implements Helper {
                 && (ctx.player().position().y < goingTo.y - 5 || start.distanceTo(new Vec3(goingTo.x + 0.5, ctx.player().position().y, goingTo.z + 0.5)) > 5) // UGH!!!!!!!
                 && currentSpeed < elytraFireworkSpeed * elytraFireworkSpeed))
         ) {
-            if (!useFirework(forceUseFirework, false)) {
+            if (!useFirework(forceUseFirework, null)) {
                 logDirect("no fireworks");
             }
         }
     }
 
-    public boolean useLaunchFirework() {
+    public boolean useLaunchFirework(Rotation aim) {
         if (this.remainingFireworkTicks > 0 || this.remainingSetBackTicks > 0
-                || !useFirework(true, true)) {
+                || !useFirework(true, aim)) {
             return false;
         }
         this.process.traceFlight("launch-rocket-request", this.destination);
         return true;
     }
 
-    private boolean useFirework(boolean forced, boolean launching) {
+    private boolean useFirework(boolean forced, Rotation launchAim) {
+        boolean launching = launchAim != null;
         if (!baritone.getInventoryBehavior().throwaway(true, ElytraBehavior::isBoostingFireworks)
                 && !baritone.getInventoryBehavior().throwaway(true, ElytraBehavior::isFireworks)) {
             return false;
@@ -803,7 +872,10 @@ public final class ElytraBehavior implements Helper {
         logVerbose("attempting to use firework" + (forced ? " (forced)" : ""));
         int before = this.process.availableRockets();
         int duration = getFireworkBoost(ctx.player().getItemInHand(hand)).orElse(0);
-        var result = ctx.playerController().processRightClick(ctx.player(), ctx.world(), hand);
+        InteractionHand chosenHand = hand;
+        var result = launching ? ElytraLaunchPlanner.useWithAim(ctx.player(), launchAim,
+                () -> ctx.playerController().processRightClick(ctx.player(), ctx.world(), chosenHand))
+                : ctx.playerController().processRightClick(ctx.player(), ctx.world(), hand);
         if (launching && !result.consumesAction()) {
             return false;
         }
@@ -1244,11 +1316,11 @@ public final class ElytraBehavior implements Helper {
             );
             final Vec3 lookDirection = RotationUtils.calcLookDirectionFromRotation(rotation);
 
-            motion = step(motion, lookDirection, rotation.getPitch());
+            motion = ElytraLaunchPlanner.glide(motion, lookDirection, rotation.getPitch());
             delta = delta.subtract(motion);
 
             // Collision box while the player is in motion, with additional padding for safety
-            final AABB inMotion = hitbox.inflate(motion.x, motion.y, motion.z).inflate(0.01);
+            final AABB inMotion = hitbox.expandTowards(motion.x, motion.y, motion.z).inflate(0.01);
 
             int xmin = fastFloor(inMotion.minX);
             int xmax = fastCeil(inMotion.maxX);
@@ -1271,54 +1343,11 @@ public final class ElytraBehavior implements Helper {
 
             if (i >= ticksBoostDelay && remainingTicksBoosted-- > 0) {
                 // See EntityFireworkRocket
-                motion = motion.add(
-                        lookDirection.x * 0.1 + (lookDirection.x * 1.5 - motion.x) * 0.5,
-                        lookDirection.y * 0.1 + (lookDirection.y * 1.5 - motion.y) * 0.5,
-                        lookDirection.z * 0.1 + (lookDirection.z * 1.5 - motion.z) * 0.5
-                );
+                motion = ElytraLaunchPlanner.boost(motion, lookDirection);
             }
         }
 
         return displacement;
-    }
-
-    private static Vec3 step(final Vec3 motion, final Vec3 lookDirection, final float pitch) {
-        double motionX = motion.x;
-        double motionY = motion.y;
-        double motionZ = motion.z;
-
-        float pitchRadians = pitch * RotationUtils.DEG_TO_RAD_F;
-        double pitchBase2 = Math.sqrt(lookDirection.x * lookDirection.x + lookDirection.z * lookDirection.z);
-        double flatMotion = Math.sqrt(motionX * motionX + motionZ * motionZ);
-        double thisIsAlwaysOne = lookDirection.length();
-        float pitchBase3 = Mth.cos(pitchRadians);
-        //System.out.println("always the same lol " + -pitchBase + " " + pitchBase3);
-        //System.out.println("always the same lol " + Math.abs(pitchBase3) + " " + pitchBase2);
-        //System.out.println("always 1 lol " + thisIsAlwaysOne);
-        pitchBase3 = (float) ((double) pitchBase3 * (double) pitchBase3 * Math.min(1, thisIsAlwaysOne / 0.4));
-        motionY += -0.08 + (double) pitchBase3 * 0.06;
-        if (motionY < 0 && pitchBase2 > 0) {
-            double speedModifier = motionY * -0.1 * (double) pitchBase3;
-            motionY += speedModifier;
-            motionX += lookDirection.x * speedModifier / pitchBase2;
-            motionZ += lookDirection.z * speedModifier / pitchBase2;
-        }
-        if (pitchRadians < 0) { // if you are looking down (below level)
-            double anotherSpeedModifier = flatMotion * (double) (-Mth.sin(pitchRadians)) * 0.04;
-            motionY += anotherSpeedModifier * 3.2;
-            motionX -= lookDirection.x * anotherSpeedModifier / pitchBase2;
-            motionZ -= lookDirection.z * anotherSpeedModifier / pitchBase2;
-        }
-        if (pitchBase2 > 0) { // this is always true unless you are looking literally straight up (let's just say the bot will never do that)
-            motionX += (lookDirection.x / pitchBase2 * flatMotion - motionX) * 0.1;
-            motionZ += (lookDirection.z / pitchBase2 * flatMotion - motionZ) * 0.1;
-        }
-        motionX *= 0.99f;
-        motionY *= 0.98f;
-        motionZ *= 0.99f;
-        //System.out.println(motionX + " " + motionY + " " + motionZ);
-
-        return new Vec3(motionX, motionY, motionZ);
     }
 
     private boolean passable(int x, int y, int z, boolean ignoreLava) {

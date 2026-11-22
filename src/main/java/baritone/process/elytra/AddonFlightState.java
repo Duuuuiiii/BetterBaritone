@@ -23,29 +23,31 @@ import baritone.api.process.IElytraProcess;
 import baritone.api.process.PathingCommand;
 import baritone.api.process.PathingCommandType;
 import baritone.api.utils.Rotation;
-import baritone.api.utils.RotationUtils;
+import baritone.api.utils.BetterBlockPos;
 import baritone.api.utils.input.Input;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
-import net.minecraft.tags.BlockTags;
-import net.minecraft.tags.FluidTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EquipmentSlot;
-import net.minecraft.world.entity.Pose;
 import net.minecraft.world.inventory.ClickType;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 import java.nio.file.Path;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 
 public final class AddonFlightState {
     private static final PathingCommand WAIT = new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
     private final IElytraProcess process;
+    private final ElytraSupplyAlerts supplyAlerts = new ElytraSupplyAlerts();
+    private ElytraTripForecast trip = new ElytraTripForecast();
     private BlockPos destination;
     private BlockPos paused;
     private ElytraMileage mileage;
@@ -57,6 +59,9 @@ public final class AddonFlightState {
     private int launchAt;
     private int glideAt;
     private Rotation launchAim;
+    private boolean launchIgnitionRejected;
+    private Vec3 launchOrigin;
+    private CompletableFuture<Void> launchRoute;
 
     public AddonFlightState(IElytraProcess process) {
         this.process = process;
@@ -72,6 +77,8 @@ public final class AddonFlightState {
     }
 
     public void end() {
+        supplyAlerts.reset();
+        trip = new ElytraTripForecast();
         if (mileage != null) {
             mileage.interrupt();
             saveMileage();
@@ -79,6 +86,9 @@ public final class AddonFlightState {
         destination = null;
         paused = null;
         launchAim = null;
+        launchIgnitionRejected = false;
+        launchOrigin = null;
+        launchRoute = null;
         retryAt = 0;
         previousRockets = -1;
     }
@@ -88,12 +98,18 @@ public final class AddonFlightState {
     public void togglePause() {
         if (paused != null) {
             BlockPos target = paused;
+            ElytraTripForecast activeTrip = trip;
             paused = null;
             process.pathTo(target);
+            trip = activeTrip;
+            trip.interrupt();
         } else if (process.isActive()) {
             BlockPos target = destination();
+            ElytraTripForecast activeTrip = trip;
             takeOver();
             paused = target;
+            trip = activeTrip;
+            trip.interrupt();
         } else {
             takeOver();
         }
@@ -124,7 +140,15 @@ public final class AddonFlightState {
     }
 
     public ElytraFlightStats.Estimate estimateFlight() {
-        return process.isActive() ? estimate(remainingDistance()) : null;
+        if (!process.isActive()) {
+            return null;
+        }
+        double remaining = remainingDistance();
+        return trip.estimate(remaining, estimate(remaining));
+    }
+
+    public long flightRocketsUsed() {
+        return trip.rocketsUsed();
     }
 
     public ElytraFlightStats.Estimate estimate(double distance) {
@@ -136,7 +160,9 @@ public final class AddonFlightState {
         }
         long rockets = distance == 0 ? 0 : total.rockets() == 0 || total.blocks() < 64 ? -1
                 : (long) Math.ceil(total.rockets() * distance / total.blocks());
-        return new ElytraFlightStats.Estimate(Math.round(seconds * distance / 10_000), rockets, -1);
+        long wear = distance == 0 ? 0 : total.wear() == 0 || total.blocks() < 64 ? -1
+                : (long) Math.ceil(total.wear() * distance / total.blocks());
+        return new ElytraFlightStats.Estimate(Math.round(seconds * distance / 10_000), rockets, wear);
     }
 
     public ElytraMileage mileage() {
@@ -154,20 +180,23 @@ public final class AddonFlightState {
         savedAt = System.nanoTime();
     }
 
-    public PathingCommand tick(boolean landing) {
+    public PathingCommand tick(boolean landing, List<BetterBlockPos> path,
+                               Function<BlockPos, CompletableFuture<Void>> prepareRoute) {
         LocalPlayer player = Minecraft.getInstance().player;
         if (player == null || !process.isActive()) {
             return null;
         }
         refill(player);
+        if (!landing && destination() != null) {
+            trip.sample(remainingDistance());
+        }
         var chest = player.getItemBySlot(EquipmentSlot.CHEST);
         if (player.isFallFlying() && !player.onGround()) {
             mileage().sample(player.position(), chest.is(Items.ELYTRA) ? chest.getDamageValue() : -1);
-            int rockets = player.getInventory().getNonEquipmentItems().stream().filter(AddonFlightState::rocket)
-                    .mapToInt(ItemStack::getCount).sum();
-            rockets += rocket(player.getOffhandItem()) ? player.getOffhandItem().getCount() : 0;
+            int rockets = countRockets(player);
             if (previousRockets - rockets == 1) {
                 mileage.rocketUsed();
+                trip.rocketUsed();
             }
             previousRockets = rockets;
             if (System.nanoTime() - savedAt > 30_000_000_000L) {
@@ -176,26 +205,31 @@ public final class AddonFlightState {
         } else if (mileage != null) {
             mileage.interrupt();
         }
+        if (player.tickCount % 20 == 0) {
+            supplyAlerts.update(player, countRockets(player), estimateFlight(),
+                    message -> player.displayClientMessage(Component.literal(message), true));
+        }
+        supplyAlerts.tick(player);
         if (landing || player.isInLava() || player.isInWater() || player.isOnFire()) {
             launchAim = null;
             return null;
         }
-        if (launchAim == null && player.onGround() && !player.isFallFlying()
-                && chest.is(Items.ELYTRA) && chest.getMaxDamage() - chest.getDamageValue() > 1
-                && player.tickCount >= retryAt && rocketSlot(player) != -2) {
-            retryAt = player.tickCount + 40;
-            launchAim = launchDirection(player);
-            launchAt = player.tickCount;
-            glideAt = 0;
+        if (launchAim == null && player.onGround()) {
+            if (!player.isFallFlying() && chest.is(Items.ELYTRA)
+                    && chest.getMaxDamage() - chest.getDamageValue() > 1 && rocketSlot(player) != -2) {
+                prepareLaunch(player, path, prepareRoute);
+            }
+            baritone().getInputOverrideHandler().clearAllKeys();
+            return WAIT;
         }
         if (launchAim == null) {
-            return null;
+            return launchIgnitionRejected ? WAIT : null;
         }
         int elapsed = player.tickCount - launchAt;
         if (elapsed > 22 || (elapsed > 6 && player.onGround())) {
             launchAim = null;
             baritone().getInputOverrideHandler().clearAllKeys();
-            return null;
+            return launchIgnitionRejected ? WAIT : null;
         }
         var inputs = baritone().getInputOverrideHandler();
         inputs.clearAllKeys();
@@ -203,15 +237,20 @@ public final class AddonFlightState {
         if (player.onGround()) {
             inputs.setInputForceState(Input.JUMP, true);
         } else if (player.isFallFlying() && elapsed > 1) {
+            Rotation actualAim = baritone().getLookBehavior().getAimProcessor().peekRotation(launchAim);
             int slot = rocketSlot(player);
-            if (slot >= 0) {
-                player.getInventory().setSelectedSlot(slot);
+            launchIgnitionRejected = !ElytraLaunchPlanner.canIgnite(player, launchAim, actualAim);
+            if (slot != -2 && !launchIgnitionRejected) {
+                if (slot >= 0) {
+                    player.getInventory().setSelectedSlot(slot);
+                }
+                var result = ElytraLaunchPlanner.useWithAim(player, actualAim,
+                        () -> baritone().getPlayerContext().playerController().processRightClick(player, player.level(),
+                                slot < 0 ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND));
+                if (result.consumesAction()) {
+                    launchAim = null;
+                }
             }
-            if (slot != -2) {
-                baritone().getPlayerContext().playerController().processRightClick(player, player.level(),
-                        slot < 0 ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND);
-            }
-            launchAim = null;
         } else if (glideAt == 0 && player.getDeltaMovement().y < 0 && player.tryToStartFallFlying()) {
             player.connection.send(new ServerboundPlayerCommandPacket(player, ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
             glideAt = player.tickCount;
@@ -219,43 +258,35 @@ public final class AddonFlightState {
         return WAIT;
     }
 
-    private Rotation launchDirection(LocalPlayer player) {
-        Vec3 position = player.position();
-        BlockPos target = destination();
-        float yaw = target == null ? player.getYRot() : RotationUtils.calcRotationFromVec3d(position,
-                Vec3.atCenterOf(target), baritone().getPlayerContext().playerRotations()).getYaw();
-        AABB body = player.getDimensions(Pose.STANDING).makeBoundingBox(position);
-        if (!clear(player, body.expandTowards(0, 1.3, 0))) {
-            return null;
+    private void prepareLaunch(LocalPlayer player, List<BetterBlockPos> path,
+                               Function<BlockPos, CompletableFuture<Void>> prepareRoute) {
+        if (player.tickCount < retryAt) {
+            return;
         }
-        for (int offset : new int[]{0, 45, -45, 90, -90, 135, -135, 180}) {
-            Vec3 forward = Vec3.directionFromRotation(-10, yaw + offset);
-            boolean safe = true;
-            for (int step = 0; step <= 12; step++) {
-                if (!clear(player, body.move(forward.scale(step * 0.5)).move(0, 0.85, 0))) {
-                    safe = false;
-                    break;
-                }
-            }
-            if (safe) {
-                return new Rotation(yaw + offset, -10);
-            }
+        if (launchRoute != null && !launchRoute.isDone()) {
+            return;
         }
-        return null;
-    }
-
-    private static boolean clear(LocalPlayer player, AABB box) {
-        var world = player.level();
-        if (!world.noCollision(player, box)) {
-            return false;
+        Vec3 ground = player.position();
+        if (!ElytraLaunchPlanner.hasHeadroom(player, ground)) {
+            retryAt = player.tickCount + 40;
+            return;
         }
-        for (BlockPos block : BlockPos.betweenClosed(BlockPos.containing(box.minX, box.minY, box.minZ),
-                BlockPos.containing(box.maxX, box.maxY, box.maxZ))) {
-            if (!world.isLoaded(block) || world.getFluidState(block).is(FluidTags.LAVA) || world.getBlockState(block).is(BlockTags.FIRE)) {
-                return false;
-            }
+        if (launchRoute == null || launchOrigin.distanceToSqr(ground) >= 0.25) {
+            launchOrigin = ground;
+            launchRoute = prepareRoute.apply(ElytraLaunchPlanner.routeStart(ground));
+            return;
         }
-        return true;
+        if (!launchRoute.isCompletedExceptionally()) {
+            launchAim = ElytraLaunchPlanner.plan(player, ground, path);
+        }
+        launchRoute = null;
+        launchOrigin = null;
+        retryAt = player.tickCount + 40;
+        launchAt = player.tickCount;
+        glideAt = 0;
+        if (launchAim != null) {
+            launchIgnitionRejected = false;
+        }
     }
 
     private void refill(LocalPlayer player) {
@@ -286,6 +317,13 @@ public final class AddonFlightState {
             }
         }
         return false;
+    }
+
+    private static int countRockets(LocalPlayer player) {
+        int count = player.getInventory().getNonEquipmentItems().stream().filter(AddonFlightState::rocket)
+                .mapToInt(ItemStack::getCount).sum();
+        ItemStack offhand = player.getOffhandItem();
+        return count + (rocket(offhand) ? offhand.getCount() : 0);
     }
 
     private static int rocketSlot(LocalPlayer player) {

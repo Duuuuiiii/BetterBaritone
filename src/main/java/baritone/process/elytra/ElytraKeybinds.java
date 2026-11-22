@@ -36,7 +36,6 @@ public final class ElytraKeybinds {
         if (client.player != null && client.screen == null && client.isWindowActive()) {
             if (BaritoneAPI.getProvider().getPrimaryBaritone().getElytraProcess() instanceof ElytraPanelFlight process) {
                 if (pause && !this.pauseDown) {
-                    ElytraUi.playFeedback(client.getSoundManager());
                     process.toggleFlightPause();
                 } else if (takeover && !this.takeoverDown) {
                     process.takeOver();
@@ -45,7 +44,6 @@ public final class ElytraKeybinds {
                 }
             }
             if (open && !this.settingsDown) {
-                ElytraUi.playFeedback(client.getSoundManager());
                 client.setScreen(new ElytraFlightScreen());
             }
         }

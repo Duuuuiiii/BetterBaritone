@@ -4,6 +4,6 @@
   "refmap": "mixins.betterbaritone-refmap.json",
   "plugin": "baritone.launch.BetterBaritoneAddonCompatibility",
   "compatibilityLevel": "JAVA_21",
-  "client": ["MixinGui", "MixinElytraOnPlayerSoundInstance"],
+  "client": ["MixinGui", "MixinElytraOnPlayerSoundInstance", "MixinFireworkSound"],
   "injectors": { "defaultRequire": 1 }
 }

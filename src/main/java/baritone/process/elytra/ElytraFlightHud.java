@@ -30,26 +30,6 @@ public final class ElytraFlightHud {
     private String time;
     private String distance;
 
-    enum Style {
-        PILL("胶囊", "Pill"), CARD("双行卡片", "Card"), TEXT("纯文字", "Text"), MINIMAL("极简", "Minimal");
-
-        private final String chinese;
-        private final String english;
-
-        Style(String chinese, String english) {
-            this.chinese = chinese;
-            this.english = english;
-        }
-
-        String label() {
-            return text(this.chinese, this.english);
-        }
-    }
-
-    static Style style() {
-        return Style.values()[Math.clamp(SETTINGS.elytraHudStyle.get(), 0, Style.values().length - 1)];
-    }
-
     public void render(GuiGraphics graphics) {
         Minecraft client = Minecraft.getInstance();
         if (!SETTINGS.elytraFlightHud.get() || client.options.hideGui || (client.screen != null && !(client.screen instanceof ChatScreen))
@@ -71,77 +51,69 @@ public final class ElytraFlightHud {
         int tick = client.player.tickCount;
         if (this.sampledTick == Integer.MIN_VALUE || tick < this.sampledTick || tick - this.sampledTick >= 10) {
             ElytraFlightStats.Estimate estimate = process.flightEstimate();
-            this.time = estimate == null ? null : timeForStyle(estimate.seconds());
-            this.distance = distanceForStyle(process.remainingDistance());
+            this.time = estimate == null ? null : compactTime(estimate.seconds());
+            this.distance = compactDistance(process.remainingDistance());
             this.sampledTick = tick;
         }
-        drawFlight(graphics, this.time, this.distance, null);
+        Layout layout = layout(this.time, this.distance);
+        drawFlight(graphics, layout, locate(graphics, layout.width, layout.height,
+                SETTINGS.elytraHudOffsetX.get(), SETTINGS.elytraHudOffsetY.get()));
     }
 
-    static void preview(GuiGraphics graphics, int centerX, int centerY) {
-        if (SETTINGS.elytraFlightHud.get()) {
-            drawFlight(graphics, timeForStyle(4800), distanceForStyle(23500), new Position(centerX, centerY));
-        }
+    static final long PREVIEW_SECONDS = 4800;
+    static final int PREVIEW_BLOCKS = 23500;
+
+    static Layout previewLayout() {
+        return layout(compactTime(PREVIEW_SECONDS), compactDistance(PREVIEW_BLOCKS));
+    }
+
+    static void preview(GuiGraphics graphics, Layout layout, int offsetX, int offsetY) {
+        drawFlight(graphics, layout, locate(graphics, layout.width, layout.height, offsetX, offsetY));
+    }
+
+    static int offsetForPosition(int align, int viewport, int extent, int position) {
+        int clamped = Math.clamp(position, 0, Math.max(0, viewport - extent));
+        return clamped - anchorAxis(align, viewport, extent, 0);
     }
 
     private static void drawPaused(GuiGraphics graphics, long now) {
-        var font = Minecraft.getInstance().font;
-        String label = style() == Style.MINIMAL ? "" : text("已暂停", "Paused");
-        int width = label.isEmpty() ? 22 : ElytraUi.width(font, label) + 29;
-        Position pos = locate(graphics, width, 16);
+        Position pos = locate(graphics, 22, 16, SETTINGS.elytraHudOffsetX.get(), SETTINGS.elytraHudOffsetY.get());
         double pulse = 0.85 + 0.15 * Math.cos(now / 3_200_000_000.0 * Math.TAU);
         int red = ElytraUi.withOpacity(SETTINGS.elytraDarkTheme.get() ? 0xFFFF8A8A : 0xFFB62E39, pulse);
-        if (style() != Style.TEXT && style() != Style.MINIMAL) {
-            ElytraUi.rounded(graphics, pos.x, pos.y, width, 16, ElytraUi.colors().panel(), 7);
-        }
         graphics.fill(pos.x + 8, pos.y + 5, pos.x + 10, pos.y + 11, red);
         graphics.fill(pos.x + 12, pos.y + 5, pos.x + 14, pos.y + 11, red);
-        ElytraUi.drawText(graphics, font, label, pos.x + 20, pos.y + 4, red);
     }
 
-    private static void drawFlight(GuiGraphics graphics, String time, String distance, Position previewCenter) {
+    private static Layout layout(String time, String distance) {
         var font = Minecraft.getInstance().font;
-        ElytraUi.Palette colors = ElytraUi.colors();
-        Style style = style();
-        if (style == Style.MINIMAL) {
-            String content = time == null ? distance : time + " · " + distance;
-            int width = ElytraUi.width(font, content) + 10;
-            Position pos = previewCenter == null ? locate(graphics, width, 13)
-                    : new Position(previewCenter.x - width / 2, previewCenter.y - 6);
-            ElytraUi.rounded(graphics, pos.x, pos.y, width, 13, ElytraUi.withOpacity(colors.panel(), 0.84), 6);
-            ElytraUi.drawText(graphics, font, content, pos.x + 5, pos.y + 2, colors.text());
-            return;
-        }
-        String timeLabel = time == null ? "" : text("预计剩余", "ETA") + "  " + time;
-        int timeWidth = ElytraUi.width(font, timeLabel);
-        int distanceWidth = ElytraUi.width(font, distance);
-        boolean stacked = style == Style.CARD && time != null;
-        int gap = time == null || stacked ? 0 : 16;
-        int width = (stacked ? Math.max(timeWidth, distanceWidth) : timeWidth + gap + distanceWidth) + 22;
-        int height = stacked ? 30 : 16;
-        Position pos = previewCenter == null ? locate(graphics, width, height)
-                : new Position(previewCenter.x - width / 2, previewCenter.y - height / 2);
-
-        if (style != Style.TEXT) {
-            ElytraUi.rounded(graphics, pos.x, pos.y, width, height, colors.panel(), 8);
-        }
-        ElytraUi.rounded(graphics, pos.x + 7, pos.y + 6, 4, 4, colors.accent(), 2);
-        if (time != null) {
-            ElytraUi.drawText(graphics, font, timeLabel, pos.x + 15, pos.y + 4, colors.text());
-            if (!stacked) {
-                int divider = pos.x + 15 + timeWidth + gap / 2;
-                graphics.fill(divider, pos.y + 4, divider + 1, pos.y + 12, colors.muted());
-            }
-        }
-        int distanceX = pos.x + 15 + (stacked ? 0 : timeWidth + gap);
-        int distanceY = pos.y + (stacked ? 17 : 4);
-        ElytraUi.drawText(graphics, font, distance, distanceX, distanceY, stacked ? colors.muted() : colors.text());
+        String content = time == null ? distance : time + " · " + distance;
+        return new Layout(content, ElytraUi.width(font, content) + 10, 13);
     }
 
-    private static Position locate(GuiGraphics graphics, int width, int height) {
+    private static void drawFlight(GuiGraphics graphics, Layout layout, Position pos) {
+        var colors = ElytraUi.colors();
+        ElytraUi.rounded(graphics, pos.x, pos.y, layout.width, layout.height, ElytraUi.withOpacity(colors.panel(), 0.84), 6);
+        ElytraUi.drawText(graphics, Minecraft.getInstance().font, layout.content, pos.x + 5, pos.y + 2, colors.text());
+    }
+
+    private static Position locate(GuiGraphics graphics, int width, int height, int offsetX, int offsetY) {
         int anchor = Math.clamp(SETTINGS.elytraHudAnchor.get(), 0, 8);
-        return new Position(anchorAxis(anchor % 3, graphics.guiWidth(), width, SETTINGS.elytraHudOffsetX.get()),
-                anchorAxis(anchor / 3, graphics.guiHeight(), height, SETTINGS.elytraHudOffsetY.get()));
+        return new Position(anchorAxis(anchor % 3, graphics.guiWidth(), width, offsetX),
+                anchorY(anchor, graphics.guiHeight(), height, offsetY));
+    }
+
+    record Layout(String content, int width, int height) {}
+
+    static int offsetForVerticalPosition(int anchor, int viewport, int extent, int position) {
+        int clamped = Math.clamp(position, 0, Math.max(0, viewport - extent));
+        return clamped - anchorY(anchor, viewport, extent, 0);
+    }
+
+    private static int anchorY(int anchor, int viewport, int extent, int offset) {
+        int origin = anchorAxis(anchor / 3, viewport, extent, 0);
+        int inset = anchor == 4 ? 23 : 0;
+        origin = Math.min(origin + inset, Math.max(0, viewport - extent));
+        return Math.clamp((long) origin + offset, 0, Math.max(0, viewport - extent));
     }
 
     static int anchorAxis(int align, int viewport, int extent, int offset) {
@@ -157,24 +129,18 @@ public final class ElytraFlightHud {
 
     private record Position(int x, int y) {}
 
-    private static String timeForStyle(long seconds) {
-        if (style() != Style.MINIMAL) {
-            return formatMinutes(seconds);
-        }
+    private static String compactTime(long seconds) {
         long minutes = Math.max(1, Math.round(seconds / 60.0));
         return minutes >= 60 ? minutes / 60 + "h" + minutes % 60 + "m" : minutes + "m";
     }
 
-    private static String distanceForStyle(double blocks) {
-        if (style() == Style.MINIMAL) {
-            if (blocks < 1000) {
-                return Math.round(blocks) + text("格", "b");
-            }
-            return SETTINGS.elytraUseTenThousands.get() && !SETTINGS.elytraEnglishUi.get()
-                    ? String.format(java.util.Locale.ROOT, "%.1f万", blocks / 10_000)
-                    : String.format(java.util.Locale.ROOT, "%.1fk", blocks / 1000);
+    private static String compactDistance(double blocks) {
+        if (blocks < 1000) {
+            return Math.round(blocks) + text("格", "b");
         }
-        return text("剩余 ", "Left ") + ElytraFlightScreen.distance(blocks);
+        return SETTINGS.elytraUseTenThousands.get() && !SETTINGS.elytraEnglishUi.get()
+                ? String.format(java.util.Locale.ROOT, "%.1f万", blocks / 10_000)
+                : String.format(java.util.Locale.ROOT, "%.1fk", blocks / 1000);
     }
 
     static String formatMinutes(long seconds) {

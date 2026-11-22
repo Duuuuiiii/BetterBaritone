@@ -41,8 +41,11 @@ import baritone.pathing.movement.movements.MovementFall;
 import baritone.process.elytra.ElytraBehavior;
 import baritone.process.elytra.ElytraFlightDiagnostics;
 import baritone.process.elytra.ElytraFlightStats;
+import baritone.process.elytra.ElytraLaunchPlanner;
 import baritone.process.elytra.ElytraMileage;
 import baritone.process.elytra.ElytraPanelFlight;
+import baritone.process.elytra.ElytraSupplyAlerts;
+import baritone.process.elytra.ElytraTripForecast;
 import static baritone.process.elytra.ElytraUi.text;
 import baritone.process.elytra.NetherPathfinderContext;
 import baritone.process.elytra.NullElytraProcess;
@@ -53,7 +56,6 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
-import net.minecraft.sounds.SoundEvents;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -70,6 +72,7 @@ import net.minecraft.world.phys.Vec3;
 
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 
 import static baritone.api.pathing.movement.ActionCosts.COST_INF;
 
@@ -87,29 +90,28 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
     private Path mileagePath;
     private UUID mileagePlayer;
     private long lastMileageSave;
-    private long lastEtaUpdate;
-    private long displayedEta = -1;
+    private ElytraTripForecast trip = new ElytraTripForecast();
     private boolean horizontalGoal;
     private BlockPos pausedDestination;
     private boolean pausedHorizontalGoal;
-    private boolean rocketShortageWarned;
-    private boolean durabilityShortageWarned;
-    private boolean criticalSupplyWarned;
-    private boolean urgentAlert;
-    private int alertNote;
-    private int alertDelay;
+    private final ElytraSupplyAlerts supplyAlerts = new ElytraSupplyAlerts();
     private boolean landRequested;
     private boolean hasFlown;
     private boolean launchNeedsPath;
     private Rotation launchAim;
     private int launchTicks;
     private int glideRequestTick;
+    private boolean launchIgnitionRejected;
     private Vec3 launchAnchor;
+    private Vec3 launchRouteOrigin;
+    private CompletableFuture<Void> launchRoute;
     private int nextLaunchAttempt;
     private int nextRouteRetry;
     private Vec3 escapeTarget;
     private int escapeTicks;
     private boolean collisionObserved;
+    private int blockedFlightTicks;
+    private final Deque<Vec3> escapeWaypoints = new ArrayDeque<>();
 
     @Override
     public void onLostControl() {
@@ -118,20 +120,22 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         finishMileage();
         this.flightDestination = null;
         this.pausedDestination = null;
-        this.displayedEta = -1;
+        this.trip = new ElytraTripForecast();
         this.landRequested = false;
         this.hasFlown = false;
         this.launchNeedsPath = false;
         this.launchAim = null;
+        this.launchIgnitionRejected = false;
         this.launchAnchor = null;
+        this.launchRouteOrigin = null;
+        this.launchRoute = null;
         this.nextLaunchAttempt = 0;
         this.nextRouteRetry = 0;
         this.escapeTarget = null;
+        this.escapeWaypoints.clear();
+        this.blockedFlightTicks = 0;
         this.collisionObserved = false;
-        this.rocketShortageWarned = false;
-        this.durabilityShortageWarned = false;
-        this.criticalSupplyWarned = false;
-        this.alertNote = 0;
+        this.supplyAlerts.reset();
         this.badLandingSpots.clear();
         this.state = State.START_FLYING;
         this.goingToLandingSpot = false;
@@ -161,7 +165,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
     public void resetState() {
         BlockPos destination = this.flightDestination;
         if (destination != null) {
-            beginFlight(destination, this.horizontalGoal);
+            restartFlight(destination, this.horizontalGoal);
             this.repackChunks();
         }
     }
@@ -182,8 +186,20 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         }
 
         tickTelemetry();
-        boolean groundedRecovery = this.hasFlown && ctx.player().onGround() && this.state != State.LANDING;
+        boolean groundedRecovery = ctx.player().onGround() && this.state != State.LANDING
+                && (this.hasFlown || this.state == State.START_FLYING);
         this.behavior.onTick(this.launchAim == null && !groundedRecovery);
+        if (ctx.player().isInLava() && !ctx.player().isFallFlying()) {
+            this.launchAim = null;
+            this.escapeTarget = null;
+            this.escapeWaypoints.clear();
+            baritone.getInputOverrideHandler().clearAllKeys();
+            baritone.getInputOverrideHandler().setInputForceState(Input.JUMP, true);
+            if (ctx.player().tickCount % 20 == 0) {
+                traceFlight("lava-swim-up", currentDestination());
+            }
+            return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
+        }
         if (this.escapeTarget != null) {
             return tickGroundEscape();
         }
@@ -191,14 +207,10 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
             return tickLaunch();
         }
 
-        // A ground contact can leave the glide flag set for a tick. Do not steer or search for a new
-        // route during a recovery attempt, and do not walk off the block when there is no launch room.
-        if (ctx.player().onGround() && this.state != State.LANDING
-                && (this.hasFlown || this.state == State.START_FLYING && !ctx.player().isFallFlying())) {
-            if (tryGroundLaunch() || this.hasFlown) {
-                baritone.getInputOverrideHandler().clearAllKeys();
-                return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
-            }
+        if (groundedRecovery) {
+            baritone.getInputOverrideHandler().clearAllKeys();
+            tryGroundLaunch();
+            return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
         }
 
         if (calcFailed) {
@@ -219,11 +231,15 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         }
         final BetterBlockPos last = this.behavior.pathManager.path.getLast();
         boolean canFinish = canFinishFlight(remainingDistance(), safetyLanding, this.landRequested, this.goingToLandingSpot);
-        if (airborneGlide && !canFinish && this.behavior.pathManager.isComplete()
-                && (last == null || ctx.player().position().distanceToSqr(last.getCenter()) < 48 * 48)
+        boolean lowSpeedCollision = airborneGlide && ctx.player().horizontalCollision
+                && ctx.player().getDeltaMovement().horizontalDistanceSqr() < 0.0625;
+        this.blockedFlightTicks = lowSpeedCollision ? this.blockedFlightTicks + 1 : 0;
+        boolean incompleteRoute = !canFinish && this.behavior.pathManager.isComplete()
+                && (last == null || ctx.player().position().distanceToSqr(last.getCenter()) < 48 * 48);
+        if (airborneGlide && !this.goingToLandingSpot && (this.blockedFlightTicks >= 12 || incompleteRoute)
                 && ctx.player().tickCount >= this.nextRouteRetry && this.behavior.pathManager.retryDestination()) {
             this.nextRouteRetry = ctx.player().tickCount + 200;
-            traceFlight("incomplete-route-retry", currentDestination());
+            traceFlight(this.blockedFlightTicks >= 12 ? "wall-contact-reroute" : "incomplete-route-retry", currentDestination());
         }
         if (airborneGlide && canFinish && this.state != State.LANDING && (this.goingToLandingSpot
                 || this.behavior.pathManager.isComplete() || safetyLanding || this.landRequested)) {
@@ -446,7 +462,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         this.horizontalGoal = horizontal;
         this.flightTraceId = Long.toUnsignedString(System.nanoTime(), 36);
         traceFlight("flight-start", destination);
-        this.launchNeedsPath = Baritone.settings().elytraAutoJump.value && !ctx.player().isFallFlying();
+        this.launchNeedsPath = ctx.player().onGround() || Baritone.settings().elytraAutoJump.value && !ctx.player().isFallFlying();
         pathTo0(destination, false);
     }
 
@@ -463,7 +479,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         traceFlight(appendDestination ? "landing-site-selected" : "route-target", destination);
         if (appendDestination) {
             this.behavior.pathManager.pathToDestination();
-        } else {
+        } else if (!ctx.player().onGround()) {
             this.behavior.pathTo();
         }
     }
@@ -500,22 +516,32 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         if (isFlightPaused()) {
             BlockPos target = this.pausedDestination;
             boolean horizontal = this.pausedHorizontalGoal;
-            beginFlight(target, horizontal);
+            restartFlight(target, horizontal);
             return;
         }
         if (isActive()) {
             BlockPos target = this.flightDestination;
             boolean horizontal = this.horizontalGoal;
+            ElytraTripForecast activeTrip = this.trip;
             baritone.getPathingBehavior().forceCancel();
             baritone.getInputOverrideHandler().clearAllKeys();
             baritone.getLookBehavior().clearTarget();
             this.pausedDestination = target;
             this.pausedHorizontalGoal = horizontal;
+            this.trip = activeTrip;
+            this.trip.interrupt();
         } else if (baritone.getPathingControlManager().mostRecentInControl().isPresent()) {
             baritone.getPathingBehavior().forceCancel();
             baritone.getInputOverrideHandler().clearAllKeys();
             baritone.getLookBehavior().clearTarget();
         }
+    }
+
+    private void restartFlight(BlockPos target, boolean horizontal) {
+        ElytraTripForecast activeTrip = this.trip;
+        beginFlight(target, horizontal);
+        this.trip = activeTrip;
+        this.trip.interrupt();
     }
 
     public BlockPos flightDestination() {
@@ -563,16 +589,13 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         if (!isActive() || this.reachedGoal || this.landRequested) {
             return null;
         }
-        ElytraFlightStats.Estimate estimate = estimateForDistance(remainingDistance());
-        if (estimate == null) {
-            return null;
-        }
-        long now = System.nanoTime();
-        if (this.displayedEta < 0 || now - this.lastEtaUpdate >= 5_000_000_000L) {
-            this.displayedEta = estimate.seconds();
-            this.lastEtaUpdate = now;
-        }
-        return new ElytraFlightStats.Estimate(this.displayedEta, estimate.rockets(), estimate.durability());
+        double remaining = remainingDistance();
+        return this.trip.estimate(remaining, estimateForDistance(remaining));
+    }
+
+    @Override
+    public long flightRocketsUsed() {
+        return this.trip.rocketsUsed();
     }
 
     public ElytraFlightStats.Estimate estimateForDistance(double distance) {
@@ -588,7 +611,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
                 : total.blocks() >= 64 && total.rockets() > 0 ? (long) Math.ceil(total.rockets() * factor) : -1;
         return new ElytraFlightStats.Estimate(Math.round(seconds * distance / ElytraMileage.ETA_BLOCKS),
                 rockets,
-                total.blocks() >= 64 ? (long) Math.ceil(total.wear() * factor) : -1);
+                distance == 0 ? 0 : total.blocks() >= 64 && total.wear() > 0 ? (long) Math.ceil(total.wear() * factor) : -1);
     }
 
     public ElytraMileage mileage() {
@@ -635,6 +658,10 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
     }
 
     public void traceFlight(String event, BlockPos controllerTarget) {
+        traceFlight(event, controllerTarget, "");
+    }
+
+    private void traceFlight(String event, BlockPos controllerTarget, String detail) {
         if (this.flightTraceId == null || ctx.player() == null) {
             return;
         }
@@ -643,13 +670,13 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         ElytraFlightDiagnostics.record(baritone.getDirectory(), String.format(Locale.ROOT,
                 "flight=%s tick=%d event=%s state=%s arrived=%s landing=%s pos=%.2f,%.2f,%.2f"
                         + " speed=%.2f vertical=%.2f yaw=%.1f pitch=%.1f onGround=%s gliding=%s lava=%s"
-                        + " collision=%s rockets=%d destination=%s steering=%s",
+                        + " collision=%s rockets=%d destination=%s steering=%s%s",
                 this.flightTraceId, ctx.player().tickCount, event, this.state,
                 this.reachedGoal, this.goingToLandingSpot, pos.x, pos.y, pos.z,
                 motion.horizontalDistance() * 20, motion.y * 20, ctx.player().getYRot(), ctx.player().getXRot(),
                 ctx.player().onGround(), ctx.player().isFallFlying(), ctx.player().isInLava(),
                 ctx.player().horizontalCollision || ctx.player().verticalCollision,
-                availableRockets(), this.flightDestination, controllerTarget));
+                availableRockets(), this.flightDestination, controllerTarget, detail));
     }
 
     public int availableRockets() {
@@ -663,80 +690,30 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         return count + (ElytraBehavior.isFireworks(offhand) ? offhand.getCount() : 0);
     }
 
-    private void checkSupplyEstimate() {
-        int rocketBudget = Math.max(0, availableRockets() - Baritone.settings().elytraMinFireworksBeforeLanding.value);
-        int reserve = Baritone.settings().elytraMinimumDurability.value;
-        int durabilityBudget = Math.max(0, equippedDurability() - reserve);
-        if (Baritone.settings().elytraAutoSwap.value) {
-            for (ItemStack stack : ctx.player().getInventory().getNonEquipmentItems()) {
-                if (stack.is(Items.ELYTRA)) {
-                    durabilityBudget += Math.max(0, stack.getMaxDamage() - stack.getDamageValue() - reserve);
-                }
-            }
-        }
-
-        boolean critical = rocketBudget <= 8 || durabilityBudget <= 20;
-        if (critical && !this.criticalSupplyWarned) {
-            this.criticalSupplyWarned = true;
-            logDirect(text("飞行补给告急", "Flight supplies are low"));
-            startSupplyAlert(true);
-        } else if (!critical) {
-            this.criticalSupplyWarned = false;
-        }
-
-        ElytraFlightStats.Estimate estimate = flightEstimate();
-        if (estimate == null || (this.rocketShortageWarned && this.durabilityShortageWarned)) {
-            return;
-        }
-        boolean warned = false;
-        if (!this.rocketShortageWarned && estimate.rockets() > rocketBudget) {
-            this.rocketShortageWarned = true;
-            logDirect(text("预计烟花还差约 ", "Estimated rocket shortage: ") + (estimate.rockets() - rocketBudget) + text(" 个", ""));
-            warned = true;
-        }
-        if (!this.durabilityShortageWarned && estimate.durability() > durabilityBudget) {
-            this.durabilityShortageWarned = true;
-            logDirect(text("预计鞘翅状态无法支撑全程，请准备备用鞘翅", "Estimated elytra wear exceeds current supplies"));
-            warned = true;
-        }
-        if (warned && !critical) {
-            startSupplyAlert(false);
-        }
-    }
-
-    private void startSupplyAlert(boolean urgent) {
-        this.urgentAlert = urgent;
-        this.alertNote = 1;
-        this.alertDelay = 0;
-        tickSupplyAlert();
-    }
-
-    private void tickSupplyAlert() {
-        if (this.alertNote == 0) {
-            return;
-        }
-        if (!Baritone.settings().elytraSupplyAlertSound.value) {
-            this.alertNote = 0;
-            return;
-        }
-        if (this.alertDelay-- > 0) {
-            return;
-        }
-        float pitch = this.urgentAlert ? 1.32f + this.alertNote * 0.16f : 1.07f + this.alertNote * 0.14f;
-        ctx.player().playSound(SoundEvents.AMETHYST_BLOCK_CHIME, 0.55f, pitch);
-        this.alertDelay = this.urgentAlert ? 2 : 5;
-        this.alertNote = this.alertNote < (this.urgentAlert ? 3 : 2) ? this.alertNote + 1 : 0;
-    }
-
     public void onRocketUsed() {
         mileage().rocketUsed();
+        this.trip.rocketUsed();
         traceFlight("rocket-confirmed", currentDestination());
     }
 
     private void tickTelemetry() {
-        tickSupplyAlert();
+        if (this.flightDestination != null && !this.goingToLandingSpot) {
+            this.trip.sample(remainingDistance());
+        }
+        if (ctx.player().tickCount % 20 == 0) {
+            this.supplyAlerts.update(ctx.player(), availableRockets(), flightEstimate(), this::logDirect);
+        }
+        this.supplyAlerts.tick(ctx.player());
         if (ctx.player().tickCount % 40 == 0) {
             traceFlight("sample", currentDestination());
+        }
+        if (ctx.player().tickCount % 1200 == 0 && !this.goingToLandingSpot) {
+            ElytraFlightStats.Estimate estimate = flightEstimate();
+            if (estimate != null) {
+                traceFlight("forecast", currentDestination(), String.format(Locale.ROOT,
+                        " remainingBlocks=%.0f etaSeconds=%d estimatedRockets=%d tripRockets=%d",
+                        remainingDistance(), estimate.seconds(), estimate.rockets(), flightRocketsUsed()));
+            }
         }
         boolean collision = ctx.player().isFallFlying() && ctx.player().horizontalCollision;
         if (collision && !this.collisionObserved) {
@@ -754,41 +731,69 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         if (System.nanoTime() - this.lastMileageSave >= 30_000_000_000L) {
             saveMileage();
         }
-        if (ctx.player().tickCount % 20 == 0) {
-            checkSupplyEstimate();
-        }
     }
 
-    private boolean tryGroundLaunch() {
+    private void tryGroundLaunch() {
+        Vec3 ground = ctx.player().position();
         if (ctx.player().tickCount < this.nextLaunchAttempt && this.launchAnchor != null
-                && this.launchAnchor.distanceToSqr(ctx.player().position()) < 0.25) {
-            return false;
+                && this.launchAnchor.distanceToSqr(ground) < 0.25) {
+            return;
         }
         if (ctx.player().isFallFlying() || ctx.player().isInLava() || ctx.player().isInWater()
                 || ctx.player().isOnFire() || shouldLandForSafety()) {
-            return false;
+            return;
         }
-        this.launchAnchor = ctx.player().position();
-        this.nextLaunchAttempt = ctx.player().tickCount + 40;
-        this.launchAim = findLaunchAim(standingBox(this.launchAnchor), this.launchAnchor);
-        if (this.launchAim == null) {
-            traceFlight("launch-no-clearance", currentDestination());
-            if (this.hasFlown || this.state == State.START_FLYING) {
-                this.escapeTarget = findGroundEscape();
-                if (this.escapeTarget != null) {
-                    this.escapeTicks = 0;
-                    traceFlight("ground-escape-start", BlockPos.containing(this.escapeTarget));
-                    return true;
-                }
-                traceFlight("ground-escape-blocked", currentDestination());
+        if (!ElytraLaunchPlanner.hasHeadroom(ctx.player(), ground)) {
+            waitForGroundRetry(ground, "launch-no-clearance");
+            return;
+        }
+        if (this.launchRoute == null || this.launchRouteOrigin.distanceToSqr(ground) >= 0.25) {
+            if (!this.behavior.pathManager.isRecalculating()) {
+                BlockPos start = ElytraLaunchPlanner.routeStart(ground);
+                this.launchRouteOrigin = ground;
+                this.launchRoute = this.behavior.pathManager.pathToDestination(start);
+                traceFlight("launch-route-planning", start);
             }
-            return false;
+            return;
         }
+        if (!this.launchRoute.isDone()) {
+            return;
+        }
+        if (this.launchRoute.isCompletedExceptionally()) {
+            waitForGroundRetry(ground, "launch-route-unavailable");
+            return;
+        }
+        this.launchAim = ElytraLaunchPlanner.plan(ctx.player(), ground, this.behavior.pathManager.getPath());
+        this.launchRoute = null;
+        this.launchRouteOrigin = null;
+        if (this.launchAim == null) {
+            waitForGroundRetry(ground, "launch-route-unsafe");
+            return;
+        }
+        this.launchNeedsPath = false;
+        this.launchAnchor = ground;
         this.launchTicks = 0;
         this.glideRequestTick = 0;
+        this.launchIgnitionRejected = false;
         this.state = State.START_FLYING;
+        traceFlight("launch-route-ready", currentDestination());
         traceFlight("launch-jump", currentDestination());
-        return true;
+    }
+
+    private void waitForGroundRetry(Vec3 ground, String event) {
+        this.launchRoute = null;
+        this.launchRouteOrigin = null;
+        this.launchAnchor = ground;
+        this.nextLaunchAttempt = ctx.player().tickCount + 40;
+        traceFlight(event, currentDestination());
+        findGroundEscape();
+        this.escapeTarget = this.escapeWaypoints.pollFirst();
+        if (this.escapeTarget != null) {
+            this.escapeTicks = 0;
+            traceFlight("ground-escape-start", BlockPos.containing(this.escapeTarget));
+        } else {
+            traceFlight("ground-escape-blocked", currentDestination());
+        }
     }
 
     private AABB standingBox(Vec3 feet) {
@@ -821,28 +826,43 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         return null;
     }
 
-    private Vec3 findGroundEscape() {
+    private void findGroundEscape() {
+        this.escapeWaypoints.clear();
         Vec3 start = ctx.player().position();
         AABB body = ctx.player().getBoundingBox();
-        Vec3 nearest = null;
-        double range = 5;
-        for (int angle = 0; angle < 360; angle += 45) {
-            Vec3 direction = Vec3.directionFromRotation(0, ctx.player().getYRot() + angle);
-            for (double distance = 0.25; distance <= range; distance += 0.25) {
-                Vec3 offset = direction.scale(distance);
-                if (!safeGroundStep(body.move(offset))) {
-                    break;
+        int radius = 10;
+        int width = radius * 2 + 1;
+        boolean[][] visited = new boolean[width][width];
+        Deque<EscapeNode> frontier = new ArrayDeque<>();
+        frontier.add(new EscapeNode(0, 0, null));
+        visited[radius][radius] = true;
+        int[][] steps = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        while (!frontier.isEmpty()) {
+            EscapeNode node = frontier.removeFirst();
+            Vec3 offset = new Vec3(node.x * 0.5, 0, node.z * 0.5);
+            Vec3 feet = start.add(offset);
+            if (offset.horizontalDistanceSqr() >= 0.5 && findLaunchAim(standingBox(feet), feet) != null) {
+                for (EscapeNode current = node; current.previous != null; current = current.previous) {
+                    this.escapeWaypoints.addFirst(start.add(current.x * 0.5, 0, current.z * 0.5));
                 }
-                Vec3 feet = start.add(offset);
-                if (distance >= 0.75 && findLaunchAim(standingBox(feet), feet) != null) {
-                    nearest = feet;
-                    range = distance - 0.25;
-                    break;
+                return;
+            }
+            for (int[] step : steps) {
+                int nextX = node.x + step[0];
+                int nextZ = node.z + step[1];
+                if (nextX * nextX + nextZ * nextZ > radius * radius || visited[nextX + radius][nextZ + radius]) {
+                    continue;
+                }
+                Vec3 next = new Vec3(nextX * 0.5, 0, nextZ * 0.5);
+                if (safeGroundStep(body.move(offset.lerp(next, 0.5))) && safeGroundStep(body.move(next))) {
+                    visited[nextX + radius][nextZ + radius] = true;
+                    frontier.addLast(new EscapeNode(nextX, nextZ, node));
                 }
             }
         }
-        return nearest;
     }
+
+    private record EscapeNode(int x, int z, EscapeNode previous) {}
 
     private boolean safeGroundStep(AABB box) {
         if (!launchSpaceClear(box) || !hazardFree(box.move(0, -0.15, 0))) {
@@ -864,12 +884,18 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         baritone.getInputOverrideHandler().clearAllKeys();
         Vec3 position = ctx.player().position();
         Vec3 delta = this.escapeTarget.subtract(position);
+        boolean reached = delta.horizontalDistanceSqr() <= 0.045;
+        if (reached && !this.escapeWaypoints.isEmpty()) {
+            this.escapeTarget = this.escapeWaypoints.removeFirst();
+            return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
+        }
         Vec3 direction = new Vec3(delta.x, 0, delta.z).normalize();
-        boolean reached = delta.horizontalDistanceSqr() <= 0.09;
-        if (reached || ++this.escapeTicks > 50 || !ctx.player().onGround() || ctx.player().isOnFire()
-                || Math.abs(delta.y) > 0.2 || !safeGroundStep(ctx.player().getBoundingBox().move(direction.scale(0.33)))) {
+        double step = Math.min(0.30, delta.horizontalDistance());
+        if (reached || ++this.escapeTicks > 80 || !ctx.player().onGround() || ctx.player().isOnFire()
+                || Math.abs(delta.y) > 0.2 || !safeGroundStep(ctx.player().getBoundingBox().move(direction.scale(step)))) {
             traceFlight(reached ? "ground-escape-complete" : "ground-escape-aborted", BlockPos.containing(this.escapeTarget));
             this.escapeTarget = null;
+            this.escapeWaypoints.clear();
             this.launchAnchor = reached ? null : position;
             baritone.getLookBehavior().clearTarget();
         } else {
@@ -916,21 +942,33 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
                     ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
             this.glideRequestTick = tick;
             traceFlight("launch-glide-request", currentDestination());
-        } else if (!ctx.player().onGround() && ctx.player().isFallFlying() && this.behavior.useLaunchFirework()) {
-            this.launchAim = null;
-            this.launchAnchor = null;
-            this.hasFlown = true;
-            this.state = State.FLYING;
-            startPathAfterLaunch();
+        } else if (!ctx.player().onGround() && ctx.player().isFallFlying()) {
+            Rotation actualAim = baritone.getLookBehavior().getAimProcessor().peekRotation(this.launchAim);
+            if (ElytraLaunchPlanner.canIgnite(ctx.player(), this.launchAim, actualAim)) {
+                if (this.behavior.useLaunchFirework(actualAim)) {
+                    this.launchAim = null;
+                    this.launchIgnitionRejected = false;
+                    this.launchAnchor = null;
+                    this.hasFlown = true;
+                    this.state = State.FLYING;
+                }
+            } else if (!this.launchIgnitionRejected) {
+                this.launchIgnitionRejected = true;
+                traceFlight("launch-ignition-recheck-blocked", currentDestination());
+            }
         }
         return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
     }
 
     private void startPathAfterLaunch() {
-        if (this.launchNeedsPath) {
+        if (this.launchNeedsPath && (!this.behavior.pathManager.getPath().isEmpty()
+                || this.behavior.pathManager.retryDestination())) {
             this.launchNeedsPath = false;
-            this.behavior.pathManager.pathToDestination();
         }
+    }
+
+    public boolean launchIgnitionBlocked() {
+        return this.launchIgnitionRejected;
     }
 
     static boolean canFinishFlight(double remainingDistance, boolean safetyLanding, boolean landRequested, boolean landingApproach) {

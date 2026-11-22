@@ -23,13 +23,11 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.renderer.RenderPipelines;
-import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.FontDescription;
 import net.minecraft.network.chat.Style;
 import net.minecraft.resources.Identifier;
-import net.minecraft.sounds.SoundEvents;
 
 public final class ElytraUi {
     private static final Identifier ROUND_MASK = Identifier.fromNamespaceAndPath("betterbaritone", "textures/gui/round_mask.png");
@@ -123,10 +121,6 @@ public final class ElytraUi {
                 MASK_SIZE / 2, MASK_SIZE / 2, MASK_SIZE, MASK_SIZE, color);
     }
 
-    static void playFeedback(SoundManager sounds) {
-        sounds.play(SimpleSoundInstance.forUI(SoundEvents.AMETHYST_BLOCK_HIT, 1.34f, 0.24f));
-    }
-
     static Button button(Component label, int x, int y, int width, int height, boolean primary, Button.OnPress press) {
         return new FlightButton(ElytraUi.label(label.getString()), x, y, width, height, primary, press);
     }
@@ -145,7 +139,6 @@ public final class ElytraUi {
         @Override
         public void playDownSound(SoundManager sounds) {
             this.lastPress = System.nanoTime();
-            playFeedback(sounds);
         }
 
         @Override
@@ -168,13 +161,18 @@ public final class ElytraUi {
     }
 
     static EditBox input(Font font, int x, int y, int width, Component label, String prefix) {
+        return input(font, x, y, width, label, prefix, 26);
+    }
+
+    static EditBox input(Font font, int x, int y, int width, Component label, String prefix, int frameHeight) {
         int prefixSpace = prefix.isEmpty() ? 0 : width(font, prefix) + 9;
-        EditBox field = new EditBox(font, x + 8 + prefixSpace, y + 8, width - 16 - prefixSpace, 12, label) {
+        int insetY = (frameHeight - 10) / 2;
+        EditBox field = new EditBox(font, x + 8 + prefixSpace, y + insetY, width - 16 - prefixSpace, 12, label) {
             @Override
             public void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
                 Palette c = colors();
                 int left = getX() - 8 - prefixSpace;
-                rounded(graphics, left, getY() - 8, getWidth() + 16 + prefixSpace, 26,
+                rounded(graphics, left, getY() - insetY, getWidth() + 16 + prefixSpace, frameHeight,
                         isFocused() ? c.hover : c.surface, 7);
                 if (!prefix.isEmpty()) {
                     drawText(graphics, font, prefix, left + 8, getY(), c.muted());
