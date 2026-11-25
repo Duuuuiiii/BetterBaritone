@@ -23,6 +23,8 @@ import net.minecraft.world.phys.Vec3;
 import org.junit.Test;
 
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 public class ElytraLaunchPlannerTest {
@@ -38,5 +40,53 @@ public class ElytraLaunchPlannerTest {
     public void checksNegativeAxisAndAcceptsClearAir() {
         assertFalse(ElytraLaunchPlanner.clearBoost(GLIDING_BOX, FALLING, new Rotation(180, -10), box -> box.minZ > -27));
         assertTrue(ElytraLaunchPlanner.clearBoost(GLIDING_BOX, FALLING, new Rotation(0, -10), box -> true));
+    }
+
+    @Test
+    public void picksAnOpenHeadingWhenTheRouteFacesAWall() {
+        Rotation escape = ElytraLaunchPlanner.localHeading(GLIDING_BOX, 0, box -> box.maxZ < 7);
+        assertNotNull(escape);
+        assertTrue(ElytraLaunchPlanner.clearBoost(GLIDING_BOX, FALLING, escape, box -> box.maxZ < 7));
+        assertNull(ElytraLaunchPlanner.localHeading(GLIDING_BOX, 0,
+                box -> box.maxZ < 7 && box.minZ > -7 && box.maxX < 7 && box.minX > -7));
+    }
+
+    @Test
+    public void checksIgnitionDuringHighSpeedDescentNearAWall() {
+        var velocity = new Vec3(0, -0.45, 1.94);
+        assertFalse(ElytraLaunchPlanner.clearBoost(GLIDING_BOX, velocity, new Rotation(0, 0.7f),
+                box -> box.maxZ < 4));
+        assertTrue(ElytraLaunchPlanner.clearBoost(GLIDING_BOX, velocity, new Rotation(0, 0.7f),
+                box -> true));
+    }
+
+    @Test
+    public void diagonalIgnitionChecksTheSweptTrajectoryInsteadOfEmptyCorners() {
+        Vec3 diagonal = new Vec3(2, 0, 2);
+        AABB corner = new AABB(1.85, 10, -0.1, 2.1, 11, 0.15);
+        AABB onTrack = new AABB(0.9, 10, 0.9, 1.1, 11, 1.1);
+        assertTrue(ElytraLaunchPlanner.clearBoostStep(GLIDING_BOX, diagonal, box -> !box.intersects(corner)));
+        assertFalse(ElytraLaunchPlanner.clearBoostStep(GLIDING_BOX, diagonal, box -> !box.intersects(onTrack)));
+    }
+
+    @Test
+    public void cruiseBoostFitsNarrowCorridorsWithoutRelaxingHeatClearance() {
+        Rotation straight = new Rotation(0, 0);
+        Vec3 motion = new Vec3(0, 0, 0.9);
+        assertFalse(ElytraLaunchPlanner.clearBoost(GLIDING_BOX, motion, straight, box -> box.maxX < 0.38));
+        assertTrue(ElytraLaunchPlanner.clearCruiseBoost(GLIDING_BOX, motion, straight,
+                box -> box.maxX < 0.38, box -> true));
+        assertFalse(ElytraLaunchPlanner.clearCruiseBoost(GLIDING_BOX, motion, straight,
+                box -> box.maxX < 0.29, box -> true));
+        assertFalse(ElytraLaunchPlanner.clearCruiseBoost(GLIDING_BOX, motion, straight,
+                box -> true, box -> box.maxX < 0.38));
+    }
+
+    @Test
+    public void retriesGlideOnlyAfterTheFirstRequestHadTimeToApply() {
+        assertFalse(ElytraLaunchPlanner.shouldRequestGlide(5, 0, 0.1));
+        assertTrue(ElytraLaunchPlanner.shouldRequestGlide(5, 0, -0.03));
+        assertFalse(ElytraLaunchPlanner.shouldRequestGlide(7, 5, -0.1));
+        assertTrue(ElytraLaunchPlanner.shouldRequestGlide(9, 5, -0.1));
     }
 }

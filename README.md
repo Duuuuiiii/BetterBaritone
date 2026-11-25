@@ -4,7 +4,7 @@
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/Duuuuiiii/BetterBaritone/releases) 下载以下一种版本。
+从 [GitHub Releases](https://github.com/Duuuuiiii/BetterBaritone/releases) 下载 **0.1.41 完整替换版**。需要独立搭配官方 Baritone 的玩家可下载 [0.1.16 附加版](https://github.com/Duuuuiiii/BetterBaritone/releases/tag/v0.1.16)。
 
 | 版本 | 放进 `mods` 的文件 |
 | --- | --- |
@@ -29,8 +29,8 @@ HUD 可调整位置和偏移，也可关闭。界面默认中文，可在 HUD �
 
 ## 构建与反馈
 
-- 当前源码为 **0.1.13**，GitHub 最新公开包为 **0.1.9**。0.1.13 更新了飞行时间和烟花的实时预估。
-- 运行 `./gradlew test :fabric:addonJar -Pavailable_loaders=fabric` 可构建两种 JAR，产物在 `fabric/build/libs`。
+- 当前版本为 **0.1.41**。
+- 运行 `./gradlew test :fabric:remapJar -Pavailable_loaders=fabric,tweaker` 构建完整替换版，产物在 `fabric/build/libs`。
 - 反馈问题时附上模组版本、目标坐标和复现步骤。完整替换版的飞行日志在实例目录下的 `baritone/logs/flight.log`。[提交反馈](https://github.com/Duuuuiiii/BetterBaritone/issues)
 
 基于 [Baritone](https://github.com/cabaletta/baritone) 开发，感谢上游贡献者。[许可证](LICENSE)

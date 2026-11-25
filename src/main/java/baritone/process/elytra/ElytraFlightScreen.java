@@ -67,6 +67,7 @@ public final class ElytraFlightScreen extends Screen {
     private int tabY;
     private final List<Button> chrome = new ArrayList<>();
     private Menu menu;
+    private boolean landingSettings;
     private boolean draggingHud;
     private int dragOffsetX;
     private int dragOffsetY;
@@ -132,8 +133,13 @@ public final class ElytraFlightScreen extends Screen {
         switch (this.page) {
             case FLIGHT -> flightControls(compact);
             case KEYS -> {
-                this.step = Math.min(this.step, Math.max(16, (this.top + this.panelHeight - this.contentTop - 22) / 6));
-                keyControls();
+                if (this.landingSettings) {
+                    landingControls();
+                } else {
+                    this.step = Math.min(this.step, Math.max(16, (this.top + this.panelHeight - this.contentTop - 22)
+                            / lastSettingsRow()));
+                    keyControls();
+                }
             }
             case LINES -> lineControls();
             case HUD -> hudControls();
@@ -147,6 +153,7 @@ public final class ElytraFlightScreen extends Screen {
             this.tabDirection = Integer.signum(selected.ordinal() - this.page.ordinal());
             this.pageChangedAt = System.nanoTime();
             this.page = selected;
+            this.landingSettings = false;
             this.draggingHud = false;
             this.binding = null;
             this.error = "";
@@ -200,6 +207,53 @@ public final class ElytraFlightScreen extends Screen {
         });
         keyButton(this.settings.elytraMuteRocketSound.get() ? text("关闭", "Off") : text("开启", "On"), 6, () -> {
             this.settings.elytraMuteRocketSound.set(!this.settings.elytraMuteRocketSound.get());
+            rebuild();
+        });
+        if (lastSettingsRow() == 7) {
+            keyButton(text("打开", "Open"), 7, () -> showLandingSettings(true));
+        }
+    }
+
+    private int lastSettingsRow() {
+        return this.settings.supportsEmergencyLanding() || this.settings.supportsRepairThreshold() ? 7 : 6;
+    }
+
+    private void showLandingSettings(boolean show) {
+        this.landingSettings = show;
+        rebuild();
+    }
+
+    private void landingControls() {
+        keyButton(text("返回设置", "Back to settings"), 0, () -> showLandingSettings(false));
+        if (this.settings.supportsEmergencyLanding()) {
+            landingToggle(this.settings.elytraAllowEmergencyLand, 1);
+        }
+        if (this.settings.supportsRepairThreshold()) {
+            landingToggle(this.settings.elytraAutoRepair, 2);
+            var setting = this.settings.elytraRepairThreshold;
+            int maximum = Items.ELYTRA.getDefaultInstance().getMaxDamage();
+            int x = this.left + this.panelWidth - 76;
+            int y = this.contentTop + 3 * this.step - 4;
+            EditBox input = ElytraUi.input(this.font, x, y, 60,
+                    Component.literal(text("落地修补阈值", "Repair threshold")), "", this.step - 3);
+            input.setMaxLength(3);
+            input.setFilter(value -> value.matches("[0-9]{0,3}"));
+            input.setValue(Integer.toString(Math.clamp(setting.get(), 1, maximum)));
+            input.setResponder(value -> {
+                if (!value.isEmpty()) {
+                    int threshold = Integer.parseInt(value);
+                    if (threshold >= 1 && threshold <= maximum) {
+                        setting.set(threshold);
+                    }
+                }
+            });
+            addRenderableWidget(input);
+        }
+    }
+
+    private void landingToggle(ElytraPanelOptions.Option<Boolean> setting, int row) {
+        keyButton(setting.get() ? text("开启", "On") : text("关闭", "Off"), row, () -> {
+            setting.set(!setting.get());
             rebuild();
         });
     }
@@ -731,9 +785,23 @@ public final class ElytraFlightScreen extends Screen {
     }
 
     private void drawKeys(GuiGraphics graphics, ElytraUi.Palette c) {
+        if (this.landingSettings) {
+            row(graphics, c, text("落地选项", "Landing options"), "", 0);
+            if (this.settings.supportsEmergencyLanding()) {
+                row(graphics, c, text("补给不足时落地", "Land when supplies are low"), "", 1);
+            }
+            if (this.settings.supportsRepairThreshold()) {
+                row(graphics, c, text("自动落地修补", "Land and repair automatically"), "", 2);
+                row(graphics, c, text("落地修补阈值", "Repair threshold"), "", 3);
+            }
+            return;
+        }
         String[] labels = {text("打开设置界面", "Open settings"), text("暂停 / 恢复飞行", "Pause / resume"), text("食物槽", "Food slot"), text("烟花槽", "Rocket slot"), text("背包补给", "Hotbar refill"), text("鞘翅滑翔声", "Elytra glide sound"), text("烟花音效", "Firework sound")};
         for (int i = 0; i < labels.length; i++) {
             row(graphics, c, labels[i], "", i);
+        }
+        if (lastSettingsRow() == 7) {
+            row(graphics, c, text("落地选项", "Landing options"), "", 7);
         }
     }
 
@@ -812,7 +880,8 @@ public final class ElytraFlightScreen extends Screen {
         int y = this.contentTop + i * this.step;
         ElytraUi.drawText(graphics, this.font, label, this.left + 16, y, c.muted());
         ElytraUi.drawText(graphics, this.font, value, this.left + this.panelWidth - 16 - ElytraUi.width(this.font, value), y, c.text());
-        if (i < (this.page == Page.KEYS ? 6 : 4)) {
+        int lastRow = this.page == Page.KEYS ? (this.landingSettings ? 3 : lastSettingsRow()) : 4;
+        if (i < lastRow) {
             graphics.fill(this.left + 16, y + this.step - 7, this.left + this.panelWidth - 16, y + this.step - 6, c.line());
         }
     }

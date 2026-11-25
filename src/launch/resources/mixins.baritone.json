@@ -8,6 +8,7 @@
     "defaultRequire": 1
   },
   "client": [
+    "MixinAvatarRenderer",
     "MixinChunkArray",
     "MixinClientChunkProvider",
     "MixinClientPlayerEntity",
@@ -31,6 +32,7 @@
     "MixinRenderPipelines",
     "MixinRenderType",
     "MixinScreen",
+    "MixinTweakerooCameraUtils",
     "MixinWorldRenderer"
   ],
   "mixins": [

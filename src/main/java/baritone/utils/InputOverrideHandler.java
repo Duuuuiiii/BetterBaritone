@@ -45,6 +45,7 @@ public final class InputOverrideHandler extends Behavior implements IInputOverri
 
     private final BlockBreakHelper blockBreakHelper;
     private final BlockPlaceHelper blockPlaceHelper;
+    private PlayerMovementInput movementInput;
 
     public InputOverrideHandler(Baritone baritone) {
         super(baritone);
@@ -85,6 +86,7 @@ public final class InputOverrideHandler extends Behavior implements IInputOverri
     @Override
     public final void onTick(TickEvent event) {
         if (event.getType() == TickEvent.Type.OUT) {
+            this.movementInput = null;
             return;
         }
         if (isInputForcedDown(Input.CLICK_LEFT)) {
@@ -94,16 +96,23 @@ public final class InputOverrideHandler extends Behavior implements IInputOverri
         blockPlaceHelper.tick(isInputForcedDown(Input.CLICK_RIGHT));
 
         if (inControl()) {
-            if (ctx.player().input.getClass() != PlayerMovementInput.class) {
-                ctx.player().input = new PlayerMovementInput(this);
+            if (this.movementInput == null) {
+                this.movementInput = new PlayerMovementInput(this);
             }
+            restoreMovementInput();
         } else {
-            if (ctx.player().input.getClass() == PlayerMovementInput.class) { // allow other movement inputs that aren't this one, e.g. for a freecam
+            this.movementInput = null;
+            if (ctx.player().input.getClass() == PlayerMovementInput.class) {
                 ctx.player().input = new KeyboardInput(ctx.minecraft().options);
             }
         }
-        // only set it if it was previously incorrect
-        // gotta do it this way, or else it constantly thinks you're beginning a double tap W sprint lol
+    }
+
+    public void restoreMovementInput() {
+        // Keep the same input object so replacing a freecam's dummy does not reset key edges.
+        if (this.movementInput != null && ctx.player().input != this.movementInput) {
+            ctx.player().input = this.movementInput;
+        }
     }
 
     private boolean inControl() {

@@ -17,7 +17,6 @@
 
 package baritone.process.elytra;
 
-import baritone.api.BaritoneAPI;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.sounds.SoundEvent;
@@ -42,29 +41,28 @@ public final class ElytraSupplyAlerts {
     private int note;
     private int nextNote;
 
-    public void update(LocalPlayer player, int rockets, ElytraFlightStats.Estimate estimate, Consumer<String> notify) {
-        var settings = BaritoneAPI.getSettings();
+    public void update(LocalPlayer player, int rockets, Consumer<String> notify) {
         int food = nutrition(player.getOffhandItem());
         for (ItemStack stack : player.getInventory().getNonEquipmentItems()) {
             food += nutrition(stack);
         }
-        int hunger = player.getFoodData().getFoodLevel();
-        int foodLevel = (hunger <= 6 || food == 0 && hunger <= 10) ? URGENT : food <= 8 ? LOW : 0;
-        update(Supply.FOOD, foodLevel, notify);
+        update(Supply.FOOD, food <= 4 ? URGENT : food <= 8 ? LOW : 0, notify);
+        update(Supply.ROCKETS, rockets <= 8 ? URGENT : rockets <= 16 ? LOW : 0, notify);
 
-        int rocketBudget = Math.max(0, rockets - settings.elytraMinFireworksBeforeLanding.value);
-        long requiredRockets = estimate == null ? -1 : estimate.rockets();
-        update(Supply.ROCKETS, rocketBudget <= 8 ? URGENT : requiredRockets > rocketBudget ? LOW : 0, notify);
-
-        int reserve = settings.elytraMinimumDurability.value;
-        int durabilityBudget = usableDurability(player.getItemBySlot(EquipmentSlot.CHEST), reserve);
-        if (settings.elytraAutoSwap.value) {
-            for (ItemStack stack : player.getInventory().getNonEquipmentItems()) {
-                durabilityBudget += usableDurability(stack, reserve);
-            }
+        int durability = usableDurability(player.getItemBySlot(EquipmentSlot.CHEST))
+                + usableDurability(player.getOffhandItem()) + usableDurability(player.containerMenu.getCarried());
+        for (ItemStack stack : player.getInventory().getNonEquipmentItems()) {
+            durability += usableDurability(stack);
         }
-        long requiredWear = estimate == null ? -1 : estimate.durability();
-        update(Supply.ELYTRA, durabilityBudget <= 20 ? URGENT : requiredWear > durabilityBudget ? LOW : 0, notify);
+        update(Supply.ELYTRA, elytraAlertLevel(durability, levels[Supply.ELYTRA.ordinal()]), notify);
+    }
+
+    static int elytraAlertLevel(int usableDurability, int previousLevel) {
+        if (usableDurability >= 64) {
+            return 0;
+        }
+        int level = usableDurability <= 20 ? URGENT : usableDurability <= 40 ? LOW : 0;
+        return Math.max(previousLevel, level);
     }
 
     private void update(Supply supply, int level, Consumer<String> notify) {
@@ -75,7 +73,9 @@ public final class ElytraSupplyAlerts {
         } else if (level > before) {
             notify.accept(text(supply.chinese, supply.english)
                     + (level == URGENT ? text("告急", " critically low") : text("不足", " low")));
-            pending.add(supply);
+            if (playing != supply) {
+                pending.add(supply);
+            }
         }
     }
 
@@ -126,8 +126,8 @@ public final class ElytraSupplyAlerts {
         return food == null || !stack.has(DataComponents.CONSUMABLE) ? 0 : food.nutrition() * stack.getCount();
     }
 
-    private static int usableDurability(ItemStack stack, int reserve) {
-        return stack.is(Items.ELYTRA) ? Math.max(0, stack.getMaxDamage() - stack.getDamageValue() - reserve) : 0;
+    private static int usableDurability(ItemStack stack) {
+        return stack.is(Items.ELYTRA) ? Math.max(0, stack.getMaxDamage() - stack.getDamageValue() - 1) : 0;
     }
 
     private enum Supply {

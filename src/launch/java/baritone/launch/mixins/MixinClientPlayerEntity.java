@@ -22,11 +22,15 @@ import baritone.api.IBaritone;
 import baritone.api.event.events.PlayerUpdateEvent;
 import baritone.api.event.events.SprintStateEvent;
 import baritone.api.event.events.type.EventState;
+import baritone.api.utils.Rotation;
 import baritone.behavior.LookBehavior;
+import baritone.utils.InputOverrideHandler;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.entity.player.Abilities;
 import net.minecraft.world.entity.player.Input;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Group;
@@ -43,7 +47,10 @@ import java.lang.invoke.MethodType;
  * @since 8/1/2018
  */
 @Mixin(LocalPlayer.class)
-public class MixinClientPlayerEntity {
+public abstract class MixinClientPlayerEntity {
+    @Shadow
+    protected abstract boolean isControlledCamera();
+
     @Unique
     private static final MethodHandle MAY_FLY = baritone$resolveMayFly();
 
@@ -69,9 +76,52 @@ public class MixinClientPlayerEntity {
     )
     private void onPreUpdate(CallbackInfo ci) {
         IBaritone baritone = BaritoneAPI.getProvider().getBaritoneForPlayer((LocalPlayer) (Object) this);
-        if (baritone != null) {
+        if (baritone != null && !baritone.getElytraProcess().isActive()) {
             baritone.getGameEventHandler().onPlayerUpdate(new PlayerUpdateEvent(EventState.PRE));
         }
+    }
+
+    @Inject(
+            method = "tick",
+            at = @At(value = "INVOKE", target = "net/minecraft/client/player/AbstractClientPlayer.tick()V")
+    )
+    private void updateElytraBeforeMovement(CallbackInfo ci) {
+        LocalPlayer player = (LocalPlayer) (Object) this;
+        IBaritone baritone = BaritoneAPI.getProvider().getBaritoneForPlayer(player);
+        if (baritone == null || !baritone.getElytraProcess().isActive()) {
+            return;
+        }
+        // Tweakeroo can swap in a dummy input at tick HEAD when the camera is detached.
+        if (Minecraft.getInstance().getCameraEntity() != player) {
+            ((InputOverrideHandler) baritone.getInputOverrideHandler()).restoreMovementInput();
+        }
+        baritone.getGameEventHandler().onPlayerUpdate(new PlayerUpdateEvent(EventState.PRE));
+    }
+
+    @Redirect(method = "sendPosition", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/player/LocalPlayer;isControlledCamera()Z"))
+    private boolean sendFlightPositionWithDetachedCamera(LocalPlayer player) {
+        IBaritone baritone = BaritoneAPI.getProvider().getBaritoneForPlayer(player);
+        return (baritone != null && baritone.getElytraProcess().isActive()
+                && Minecraft.getInstance().getCameraEntity() != player) || this.isControlledCamera();
+    }
+
+    // Vanilla applyInput samples both angles for first-person hand interpolation.
+    @Redirect(method = "applyInput", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/player/LocalPlayer;getXRot()F"))
+    private float handPitch(LocalPlayer player) {
+        Rotation camera = baritone$flightCameraRotation(player);
+        return camera == null ? player.getXRot() : camera.getPitch();
+    }
+
+    @Redirect(method = "applyInput", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/player/LocalPlayer;getYRot()F"))
+    private float handYaw(LocalPlayer player) {
+        Rotation camera = baritone$flightCameraRotation(player);
+        return camera == null ? player.getYRot() : camera.getYaw();
+    }
+
+    @Unique
+    private Rotation baritone$flightCameraRotation(LocalPlayer player) {
+        IBaritone baritone = BaritoneAPI.getProvider().getBaritoneForPlayer(player);
+        return baritone == null ? null : ((LookBehavior) baritone.getLookBehavior()).getFlightCameraRotation();
     }
 
     @Redirect(

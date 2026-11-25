@@ -17,6 +17,10 @@
 
 package baritone.process.elytra;
 
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +38,7 @@ public final class ElytraMileage {
     private static final Logger LOGGER = LoggerFactory.getLogger(ElytraMileage.class);
     public static final int ETA_BLOCKS = 10_000;
     private static final int SEGMENT_BLOCKS = 100;
+    private static final double LEGACY_ROUTE_ALLOWANCE = 1.25;
     private final Deque<Segment> recent = new ArrayDeque<>();
     private double distance;
     private double seconds;
@@ -41,35 +46,54 @@ public final class ElytraMileage {
     private long wear;
     private double recentBlocks;
     private double recentSeconds;
+    private double tripSecondsPerTenThousand;
+    private double tripRocketsPerTenThousand = -1;
+    private double tripWearPerTenThousand = -1;
     private double segmentBlocks;
     private double segmentSeconds;
     private Vec3 previousPosition;
     private long previousTime;
-    private int previousWear = -1;
+    private int previousDurability = -1;
     private boolean dirty;
 
-    public void sample(Vec3 position, int damage) {
-        long now = System.nanoTime();
+    public int sample(LocalPlayer player) {
+        // Transfers between chest, inventory and cursor preserve the total durability.
+        int durability = durability(player.getItemBySlot(EquipmentSlot.CHEST))
+                + durability(player.getOffhandItem()) + durability(player.containerMenu.getCarried());
+        for (ItemStack stack : player.getInventory().getNonEquipmentItems()) {
+            durability += durability(stack);
+        }
+        return sample(player.position(), durability, System.nanoTime());
+    }
+
+    private static int durability(ItemStack stack) {
+        return stack.is(Items.ELYTRA) ? stack.getMaxDamage() - stack.getDamageValue() : 0;
+    }
+
+    int sample(Vec3 position, int durability, long now) {
+        int wearUsed = 0;
         if (this.previousPosition != null) {
             double deltaSeconds = Math.max(0, (now - this.previousTime) / 1e9);
             double blocks = position.subtract(this.previousPosition).horizontalDistance();
             // Ignore teleports and gaps when the client was suspended.
             if (deltaSeconds <= 3 && blocks < 20) {
                 append(blocks, deltaSeconds);
-                int used = damage - this.previousWear;
-                if (this.previousWear >= 0 && damage >= 0 && used > 0 && used <= 4) {
+                int used = this.previousDurability - durability;
+                if (used > 0 && used <= 4) {
+                    wearUsed = used;
                     this.wear += used;
                 }
             }
         }
         this.previousPosition = position;
         this.previousTime = now;
-        this.previousWear = damage;
+        this.previousDurability = durability;
+        return wearUsed;
     }
 
     public void interrupt() {
         this.previousPosition = null;
-        this.previousWear = -1;
+        this.previousDurability = -1;
     }
 
     public void rocketUsed() {
@@ -126,6 +150,53 @@ public final class ElytraMileage {
         return Math.max(0, duration);
     }
 
+    public void recordTripRates(ElytraTripForecast trip) {
+        double measuredTime = trip.calibratedSecondsPerTenThousand();
+        if (measuredTime <= 0) {
+            return;
+        }
+        double measuredRockets = trip.calibratedRocketsPerTenThousand();
+        double measuredWear = trip.calibratedWearPerTenThousand();
+        if (measuredTime != this.tripSecondsPerTenThousand || measuredRockets != this.tripRocketsPerTenThousand
+                || measuredWear != this.tripWearPerTenThousand) {
+            this.tripSecondsPerTenThousand = measuredTime;
+            this.tripRocketsPerTenThousand = measuredRockets;
+            this.tripWearPerTenThousand = measuredWear;
+            this.dirty = true;
+        }
+    }
+
+    public ElytraFlightStats.Estimate estimate(double remaining) {
+        return new ElytraFlightStats.Estimate(estimateSeconds(remaining),
+                estimateConsumption(remaining, this.tripRocketsPerTenThousand, this.rockets),
+                estimateConsumption(remaining, this.tripWearPerTenThousand, this.wear));
+    }
+
+    private long estimateConsumption(double remaining, double rate, long historical) {
+        if (remaining <= 0) {
+            return 0;
+        }
+        if (rate >= 0) {
+            return (long) Math.ceil(rate * remaining / ETA_BLOCKS);
+        }
+        return this.distance >= 64 && historical > 0
+                ? (long) Math.ceil(historical * remaining / this.distance * LEGACY_ROUTE_ALLOWANCE)
+                : -1;
+    }
+
+    public long estimateSeconds(double remaining) {
+        double pace = this.tripSecondsPerTenThousand;
+        if (pace <= 0) {
+            double historical = recentSecondsPerTenThousand();
+            if (historical <= 0 && this.distance >= 64 && this.seconds > 0) {
+                historical = ETA_BLOCKS * this.seconds / this.distance;
+            }
+            // Older profiles record traveled distance and cannot account for detours.
+            pace = historical > 0 ? historical * LEGACY_ROUTE_ALLOWANCE : 1_000;
+        }
+        return Math.round(pace * remaining / ETA_BLOCKS);
+    }
+
     public Summary summary() {
         return new Summary(this.distance, this.seconds, this.rockets, this.wear);
     }
@@ -140,6 +211,13 @@ public final class ElytraMileage {
         properties.setProperty("seconds", Double.toString(this.seconds));
         properties.setProperty("rockets", Long.toString(this.rockets));
         properties.setProperty("wear", Long.toString(this.wear));
+        properties.setProperty("tripSecondsPerTenThousand", Double.toString(this.tripSecondsPerTenThousand));
+        if (this.tripRocketsPerTenThousand >= 0) {
+            properties.setProperty("tripRocketsPerTenThousand", Double.toString(this.tripRocketsPerTenThousand));
+        }
+        if (this.tripWearPerTenThousand >= 0) {
+            properties.setProperty("tripWearPerTenThousand", Double.toString(this.tripWearPerTenThousand));
+        }
         StringBuilder window = new StringBuilder();
         for (Segment segment : this.recent) {
             window.append(segment.blocks).append(',').append(segment.seconds).append(';');
@@ -182,6 +260,13 @@ public final class ElytraMileage {
             result.seconds = nonnegative(properties.getProperty("seconds", "0"));
             result.rockets = (long) nonnegative(properties.getProperty("rockets", "0"));
             result.wear = (long) nonnegative(properties.getProperty("wear", "0"));
+            result.tripSecondsPerTenThousand = nonnegative(properties.getProperty("tripSecondsPerTenThousand", "0"));
+            if (properties.containsKey("tripRocketsPerTenThousand")) {
+                result.tripRocketsPerTenThousand = nonnegative(properties.getProperty("tripRocketsPerTenThousand"));
+            }
+            if (properties.containsKey("tripWearPerTenThousand")) {
+                result.tripWearPerTenThousand = nonnegative(properties.getProperty("tripWearPerTenThousand"));
+            }
             for (String encoded : properties.getProperty("recent", "").split(";")) {
                 if (!encoded.isEmpty()) {
                     String[] pair = encoded.split(",", -1);

@@ -23,10 +23,12 @@ import baritone.api.behavior.ILookBehavior;
 import baritone.api.behavior.look.IAimProcessor;
 import baritone.api.behavior.look.ITickableAimProcessor;
 import baritone.api.event.events.*;
+import baritone.api.event.events.type.EventState;
 import baritone.api.utils.IPlayerContext;
 import baritone.api.utils.Rotation;
 import baritone.behavior.look.ForkableRandom;
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import net.minecraft.util.Mth;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -50,6 +52,8 @@ public final class LookBehavior extends Behavior implements ILookBehavior {
      * @see Settings#freeLook
      */
     private Rotation prevRotation;
+    private Rotation previousFlightPose;
+    private Rotation flightPose;
 
     private final AimProcessor processor;
 
@@ -72,6 +76,20 @@ public final class LookBehavior extends Behavior implements ILookBehavior {
         this.target = new Target(rotation, Target.Mode.resolve(ctx, blockInteract));
     }
 
+    /** Returns the local view while a temporary flight rotation is applied to the player. */
+    public Rotation getFlightCameraRotation() {
+        return this.target != null && this.target.mode == Target.Mode.SERVER && baritone.getElytraProcess().isActive()
+                ? this.prevRotation : null;
+    }
+
+    public Rotation getFlightRenderRotation(float partialTick) {
+        if (this.flightPose == null || !baritone.getElytraProcess().isActive()) {
+            return null;
+        }
+        return new Rotation(Mth.rotLerp(partialTick, this.previousFlightPose.getYaw(), this.flightPose.getYaw()),
+                Mth.lerp(partialTick, this.previousFlightPose.getPitch(), this.flightPose.getPitch()));
+    }
+
     @Override
     public IAimProcessor getAimProcessor() {
         return this.processor;
@@ -86,6 +104,12 @@ public final class LookBehavior extends Behavior implements ILookBehavior {
 
     @Override
     public void onPlayerUpdate(PlayerUpdateEvent event) {
+        if (event.getState() == EventState.PRE) {
+            if (!baritone.getElytraProcess().isActive() || !ctx.player().isFallFlying()) {
+                this.flightPose = null;
+            }
+            this.previousFlightPose = this.flightPose;
+        }
 
         if (this.target == null) {
             return;
@@ -100,6 +124,11 @@ public final class LookBehavior extends Behavior implements ILookBehavior {
 
                 this.prevRotation = new Rotation(ctx.player().getYRot(), ctx.player().getXRot());
                 final Rotation actual = this.processor.peekRotation(this.target.rotation);
+                if (baritone.getElytraProcess().isActive() && ctx.player().isFallFlying()) {
+                    this.previousFlightPose = this.flightPose == null ? actual : this.flightPose;
+                    this.flightPose = new Rotation(Mth.rotLerp(0.35f, this.previousFlightPose.getYaw(), actual.getYaw()),
+                            Mth.lerp(0.35f, this.previousFlightPose.getPitch(), actual.getPitch()));
+                }
                 ctx.player().setYRot(actual.getYaw());
                 ctx.player().setXRot(actual.getPitch());
                 break;
@@ -153,6 +182,8 @@ public final class LookBehavior extends Behavior implements ILookBehavior {
     public void onWorldEvent(WorldEvent event) {
         this.serverRotation = null;
         this.target = null;
+        this.previousFlightPose = null;
+        this.flightPose = null;
     }
 
     public void pig() {

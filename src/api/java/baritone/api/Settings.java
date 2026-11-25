@@ -1528,6 +1528,16 @@ public final class Settings {
     public final Setting<Boolean> elytraAutoSwap = new Setting<>(true);
 
     /**
+     * Use experience bottles on safe ground to repair an equipped elytra with Mending.
+     */
+    public final Setting<Boolean> elytraAutoRepair = new Setting<>(true);
+
+    /**
+     * Start elytra repair only when every carried elytra is at or below this remaining durability.
+     */
+    public final Setting<Integer> elytraRepairThreshold = new Setting<>(10);
+
+    /**
      * The minimum durability an elytra can have before being swapped
      */
     public final Setting<Integer> elytraMinimumDurability = new Setting<>(5);

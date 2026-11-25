@@ -64,11 +64,22 @@ public final class ElytraPanelOptions {
     public final Option<Boolean> elytraSupplyAlertSound = option("elytraSupplyAlertSound", true);
     public final Option<Integer> elytraRocketSlot = option("elytraRocketSlot", 9);
     public final Option<Integer> elytraFoodSlot = option("elytraFoodSlot", 6);
+    public final Option<Boolean> elytraAllowEmergencyLand = option("elytraAllowEmergencyLand", true);
+    public final Option<Boolean> elytraAutoRepair = option("elytraAutoRepair", true);
+    public final Option<Integer> elytraRepairThreshold = option("elytraRepairThreshold", 10);
     public final Option<Double> elytraFireworkSpeed = option("elytraFireworkSpeed", 1.2);
     public final Option<Boolean> elytraRenderSimulation = option("elytraRenderSimulation", true);
 
     public static ElytraPanelOptions get() {
         return Holder.INSTANCE;
+    }
+
+    boolean supportsRepairThreshold() {
+        return elytraAutoRepair.upstream != null && elytraRepairThreshold.upstream != null;
+    }
+
+    boolean supportsEmergencyLanding() {
+        return elytraAllowEmergencyLand.upstream != null;
     }
 
     @SuppressWarnings("unchecked")

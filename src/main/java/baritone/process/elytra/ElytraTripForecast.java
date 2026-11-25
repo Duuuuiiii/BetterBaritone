@@ -23,7 +23,6 @@ import java.util.Iterator;
 
 public final class ElytraTripForecast {
     private static final long UPDATE_NANOS = 5_000_000_000L;
-    private static final long MAX_WINDOW_NANOS = 1_800_000_000_000L;
     private static final double MIN_PROGRESS = 512;
     private final Deque<Sample> recent = new ArrayDeque<>();
     private long elapsed;
@@ -31,8 +30,10 @@ public final class ElytraTripForecast {
     private double previousRemaining;
     private double netProgress;
     private long rockets;
+    private long wear;
     private double secondsPerBlock;
     private double rocketsPerBlock = -1;
+    private double wearPerBlock = -1;
     private double observedWeight;
 
     public void sample(double remaining) {
@@ -43,9 +44,12 @@ public final class ElytraTripForecast {
         if (previousTime != Long.MIN_VALUE) {
             long interval = now - previousTime;
             double progress = previousRemaining - remaining;
-            if (interval > 0 && interval <= 3_000_000_000L && Math.abs(progress) < 20) {
+            if (interval > 0) {
                 elapsed += interval;
-                netProgress += progress;
+                // Position corrections do not contribute distance, but the active trip still took that time.
+                if (Math.abs(progress) < 20) {
+                    netProgress += progress;
+                }
             }
         }
         previousTime = now;
@@ -68,6 +72,14 @@ public final class ElytraTripForecast {
         return rockets;
     }
 
+    public void recordWear(int amount) {
+        wear += amount;
+    }
+
+    public long wearUsed() {
+        return wear;
+    }
+
     public ElytraFlightStats.Estimate estimate(double remaining, ElytraFlightStats.Estimate fallback) {
         if (remaining <= 0) {
             return new ElytraFlightStats.Estimate(0, 0, 0);
@@ -76,21 +88,38 @@ public final class ElytraTripForecast {
             return fallback;
         }
         long seconds = Math.round(fallback.seconds() * (1 - observedWeight) + secondsPerBlock * remaining * observedWeight);
-        long expectedRockets = fallback.rockets();
-        if (rocketsPerBlock >= 0) {
-            expectedRockets = expectedRockets < 0 ? (long) Math.ceil(rocketsPerBlock * remaining)
-                    : (long) Math.ceil(expectedRockets * (1 - observedWeight) + rocketsPerBlock * remaining * observedWeight);
+        return new ElytraFlightStats.Estimate(seconds,
+                estimateConsumption(remaining, fallback.rockets(), rocketsPerBlock),
+                estimateConsumption(remaining, fallback.durability(), wearPerBlock));
+    }
+
+    private long estimateConsumption(double remaining, long historical, double measuredRate) {
+        if (measuredRate < 0) {
+            return historical;
         }
-        return new ElytraFlightStats.Estimate(seconds, expectedRockets, fallback.durability());
+        double measured = measuredRate * remaining;
+        return (long) Math.ceil(historical < 0 ? measured : historical * (1 - observedWeight) + measured * observedWeight);
+    }
+
+    double calibratedSecondsPerTenThousand() {
+        return observedWeight == 1 ? secondsPerBlock * ElytraMileage.ETA_BLOCKS : 0;
+    }
+
+    double calibratedRocketsPerTenThousand() {
+        return observedWeight == 1 && rocketsPerBlock >= 0 ? rocketsPerBlock * ElytraMileage.ETA_BLOCKS : -1;
+    }
+
+    double calibratedWearPerTenThousand() {
+        return observedWeight == 1 && wearPerBlock >= 0 ? wearPerBlock * ElytraMileage.ETA_BLOCKS : -1;
     }
 
     private void updateRates() {
-        recent.addLast(new Sample(elapsed, netProgress, rockets));
+        recent.addLast(new Sample(elapsed, netProgress, rockets, wear));
         while (recent.size() > 2) {
             Iterator<Sample> samples = recent.iterator();
             samples.next();
             Sample next = samples.next();
-            if (netProgress - next.progress < ElytraMileage.ETA_BLOCKS && elapsed - next.time < MAX_WINDOW_NANOS) {
+            if (netProgress - next.progress < ElytraMileage.ETA_BLOCKS) {
                 break;
             }
             recent.removeFirst();
@@ -98,21 +127,41 @@ public final class ElytraTripForecast {
 
         Sample oldest = recent.getFirst();
         double progress = netProgress - oldest.progress;
-        long span = elapsed - oldest.time;
-        if (progress < MIN_PROGRESS || span == 0) {
+        double span = elapsed - oldest.time;
+        if (progress < MIN_PROGRESS || span <= 0) {
             return;
         }
+        double used = rockets - oldest.rockets;
+        double wearUsed = wear - oldest.wear;
+        if (progress > ElytraMileage.ETA_BLOCKS) {
+            // The two oldest samples bracket the start of the last 10,000 blocks of net progress.
+            Iterator<Sample> samples = recent.iterator();
+            samples.next();
+            Sample next = samples.next();
+            double trim = (progress - ElytraMileage.ETA_BLOCKS) / (next.progress - oldest.progress);
+            span -= (next.time - oldest.time) * trim;
+            used -= (next.rockets - oldest.rockets) * trim;
+            wearUsed -= (next.wear - oldest.wear) * trim;
+            progress = ElytraMileage.ETA_BLOCKS;
+        }
         double measuredTime = span / 1e9 / progress;
-        long used = rockets - oldest.rockets;
-        double measuredRockets = used > 0 || progress >= ElytraMileage.ETA_BLOCKS ? used / progress : -1;
         double gain = observedWeight == 0 ? 1 : 0.08;
         secondsPerBlock += (measuredTime - secondsPerBlock) * gain;
-        if (measuredRockets >= 0) {
-            rocketsPerBlock = rocketsPerBlock < 0 || observedWeight == 0 ? measuredRockets
-                    : rocketsPerBlock + (measuredRockets - rocketsPerBlock) * gain;
-        }
-        observedWeight = Math.min(1, progress / ElytraMileage.ETA_BLOCKS);
+        double weight = Math.min(1, progress / ElytraMileage.ETA_BLOCKS);
+        // Switch to the complete window once it is available, then smooth subsequent updates.
+        double consumptionGain = observedWeight < 1 && weight == 1 ? 1 : gain;
+        rocketsPerBlock = updateConsumptionRate(rocketsPerBlock, used, progress, consumptionGain);
+        wearPerBlock = updateConsumptionRate(wearPerBlock, wearUsed, progress, consumptionGain);
+        observedWeight = weight;
     }
 
-    private record Sample(long time, double progress, long rockets) {}
+    private static double updateConsumptionRate(double previous, double used, double progress, double gain) {
+        if (used == 0 && progress < ElytraMileage.ETA_BLOCKS) {
+            return previous;
+        }
+        double measured = used / progress;
+        return previous < 0 ? measured : previous + (measured - previous) * gain;
+    }
+
+    private record Sample(long time, double progress, long rockets, long wear) {}
 }
