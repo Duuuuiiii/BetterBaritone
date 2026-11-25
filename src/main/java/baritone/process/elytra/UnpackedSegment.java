@@ -20,7 +20,6 @@ package baritone.process.elytra;
 import baritone.api.utils.BetterBlockPos;
 import dev.babbaj.pathfinder.PathSegment;
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.phys.Vec3;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -42,13 +41,20 @@ public final class UnpackedSegment {
         this.finished = finished;
     }
 
-    public UnpackedSegment append(Stream<BetterBlockPos> other, boolean otherFinished) {
-        // The new segment is only finished if the one getting added on is
-        return new UnpackedSegment(Stream.concat(this.path, other), otherFinished);
+    UnpackedSegment spliceAt(BlockPos rejoin, List<BetterBlockPos> tail, boolean completePath) {
+        List<BetterBlockPos> prefix = collect();
+        if (!this.finished || prefix.isEmpty() || !prefix.getLast().equals(rejoin)) {
+            throw new PathCalculationException("Route did not reach the rejoin point");
+        }
+        return new UnpackedSegment(Stream.concat(prefix.stream(), tail.stream()), completePath);
     }
 
-    public UnpackedSegment prepend(Stream<BetterBlockPos> other) {
-        return new UnpackedSegment(Stream.concat(other, this.path), this.finished);
+    UnpackedSegment extendFrom(BlockPos start, List<BetterBlockPos> prefix) {
+        List<BetterBlockPos> extension = collect();
+        if (extension.isEmpty() || extension.getLast().equals(start)) {
+            throw new PathCalculationException("Route extension made no progress");
+        }
+        return new UnpackedSegment(Stream.concat(prefix.stream(), extension.stream()), this.finished);
     }
 
     public List<BetterBlockPos> collect() {
@@ -61,7 +67,7 @@ public final class UnpackedSegment {
             if (positionFirstSeen.containsKey(pos)) {
                 int j = positionFirstSeen.get(pos);
                 while (i > j) {
-                    path.remove(i);
+                    positionFirstSeen.remove(path.remove(i));
                     i--;
                 }
             } else {
@@ -74,25 +80,6 @@ public final class UnpackedSegment {
 
     public boolean isFinished() {
         return this.finished;
-    }
-
-    static double forwardEfficiency(BlockPos src, BlockPos dst, long[] path) {
-        Vec3 last = src.getCenter();
-        Vec3 goal = dst.getCenter();
-        double initialDistance = last.subtract(goal).horizontalDistance();
-        double travelled = 0;
-        for (long packed : path) {
-            Vec3 next = BetterBlockPos.deserializeFromLong(packed).getCenter();
-            double step = last.distanceTo(next);
-            if (travelled + step >= 96) {
-                last = last.lerp(next, (96 - travelled) / step);
-                travelled = 96;
-                break;
-            }
-            travelled += step;
-            last = next;
-        }
-        return travelled == 0 ? 0 : (initialDistance - last.subtract(goal).horizontalDistance()) / travelled;
     }
 
     public static UnpackedSegment from(final PathSegment segment) {

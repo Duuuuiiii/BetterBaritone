@@ -19,7 +19,6 @@ package baritone.process.elytra;
 
 import baritone.Baritone;
 import baritone.api.event.events.BlockChangeEvent;
-import baritone.api.utils.BetterBlockPos;
 import baritone.utils.accessor.IPalettedContainer;
 import dev.babbaj.pathfinder.NetherPathfinder;
 import dev.babbaj.pathfinder.Octree;
@@ -36,7 +35,6 @@ import net.minecraft.world.level.chunk.PalettedContainer;
 import net.minecraft.world.phys.Vec3;
 
 import java.lang.ref.SoftReference;
-import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -103,59 +101,22 @@ public final class NetherPathfinderContext {
         });
     }
 
-    public CompletableFuture<PathSegment> pathFindAsync(BlockPos src, BlockPos dst, boolean preferDirect) {
+    public CompletableFuture<PathSegment> pathFindAsync(final BlockPos src, final BlockPos dst) {
         return CompletableFuture.supplyAsync(() -> {
-            boolean knownTerrainOnly = !Baritone.settings().elytraPredictTerrain.value;
-            PathSegment segment = findPath(src, dst, knownTerrainOnly);
+            final PathSegment segment = NetherPathfinder.pathFind(
+                    this.context,
+                    src.getX(), src.getY(), src.getZ(),
+                    dst.getX(), dst.getY(), dst.getZ(),
+                    true,
+                    false,
+                    10000,
+                    !Baritone.settings().elytraPredictTerrain.value
+            );
             if (segment == null) {
                 throw new PathCalculationException("Path calculation failed");
             }
-            if (preferDirect && !segment.finished && !Thread.currentThread().isInterrupted()) {
-                return preferForwardSegment(src, dst, segment, knownTerrainOnly);
-            }
             return segment;
         }, this.executor);
-    }
-
-    private PathSegment findPath(BlockPos src, BlockPos dst, boolean knownTerrainOnly) {
-        return NetherPathfinder.pathFind(this.context, src.getX(), src.getY(), src.getZ(),
-                dst.getX(), dst.getY(), dst.getZ(), true, false, 10000, knownTerrainOnly);
-    }
-
-    private PathSegment preferForwardSegment(BlockPos src, BlockPos dst, PathSegment original, boolean knownTerrainOnly) {
-        Vec3 towardGoal = Vec3.atCenterOf(dst).subtract(Vec3.atCenterOf(src)).multiply(1, 0, 1);
-        if (towardGoal.horizontalDistanceSqr() < 256 * 256) {
-            return original;
-        }
-        double originalEfficiency = UnpackedSegment.forwardEfficiency(src, dst, original.packed);
-        if (originalEfficiency >= 0.95) {
-            return original;
-        }
-
-        Vec3 ahead = Vec3.atCenterOf(src).add(towardGoal.normalize().scale(64));
-        BlockPos guide = BlockPos.containing(ahead);
-        if (!hasChunk(new ChunkPos(guide))) {
-            return original;
-        }
-        // Probe just inside this voxel before asking the native planner to reach it.
-        Vec3 center = guide.getCenter();
-        if (!raytrace(center, center.add(0.01, 0, 0))) {
-            return original;
-        }
-        PathSegment approach = findPath(src, guide, true);
-        if (approach == null || !approach.finished || approach.packed.length == 0
-                || !BetterBlockPos.deserializeFromLong(approach.packed[approach.packed.length - 1]).equals(guide)
-                || Thread.currentThread().isInterrupted()) {
-            return original;
-        }
-        PathSegment onward = findPath(guide, dst, knownTerrainOnly);
-        if (onward == null || onward.packed.length < 2 || UnpackedSegment.forwardEfficiency(guide, dst, onward.packed) < 0.35) {
-            return original;
-        }
-        long[] combined = Arrays.copyOf(approach.packed, approach.packed.length + onward.packed.length);
-        System.arraycopy(onward.packed, 0, combined, approach.packed.length, onward.packed.length);
-        return UnpackedSegment.forwardEfficiency(src, dst, combined) > originalEfficiency + 0.04
-                ? new PathSegment(onward.finished, combined) : original;
     }
 
     /**

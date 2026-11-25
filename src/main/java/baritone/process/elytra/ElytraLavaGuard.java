@@ -36,7 +36,6 @@ final class ElytraLavaGuard {
     private static final int INERTIA_LOOKAHEAD = 5;
     private static final int WALL_LOOKAHEAD = 8;
     private static final int BOOSTED_WALL_LOOKAHEAD = 12;
-    private static final int DESCEND_BEFORE_LEVELING = 8;
     private static final float LEVELING_PITCH = -16f;
     private static final int[] TURNS = {0, 25, -25, 55, -55, 90, -90, 135, -135, 180};
     private static final int[] CLIMB_ANGLES = {-24, -38, -52, -14};
@@ -46,40 +45,6 @@ final class ElytraLavaGuard {
     static boolean threatens(LocalPlayer player, Rotation heading, int boostedTicks, FallingLava fallingLava) {
         return threatens(player.getBoundingBox(), player.getDeltaMovement(), heading, boostedTicks,
                 box -> fallingLava.threatens(box) || touchesHeat(player, box));
-    }
-
-    static boolean runningOutOfClearance(LocalPlayer player, Rotation heading, FallingLava fallingLava) {
-        return runningOutOfClearance(player.getBoundingBox(), player.getDeltaMovement(), heading,
-                box -> fallingLava.threatens(box) || touchesHeat(player, box));
-    }
-
-    static boolean runningOutOfClearance(AABB box, Vec3 motion, Rotation heading, Predicate<AABB> heat) {
-        // After several failed ignitions, leave vertical room to turn or accept a delayed rocket.
-        return threatens(box.expandTowards(0, -1.5, 0), motion, heading, 0, heat);
-    }
-
-    static boolean canDescendAndLevel(LocalPlayer player, Rotation heading, int boostTicks, FallingLava fallingLava) {
-        return canDescendAndLevel(player.getBoundingBox(), player.getDeltaMovement(), heading, boostTicks,
-                box -> fallingLava.threatens(box) || touchesHeat(player, box), box -> !solidClear(player, box));
-    }
-
-    static boolean canDescendAndLevel(AABB box, Vec3 motion, Rotation heading, int boostTicks,
-                                     Predicate<AABB> heat, Predicate<AABB> solid) {
-        Vec3 descending = look(heading);
-        Vec3 leveling = Vec3.directionFromRotation(LEVELING_PITCH, heading.getYaw());
-        for (int tick = 0; tick < DESCENT_LOOKAHEAD; tick++) {
-            boolean descend = tick < DESCEND_BEFORE_LEVELING;
-            Vec3 direction = descend ? descending : leveling;
-            motion = ElytraLaunchPlanner.glide(motion, direction, descend ? heading.getPitch() : LEVELING_PITCH);
-            if (crossesHeat(box, motion, heat) || !clearsSolids(box, motion, solid.negate())) {
-                return false;
-            }
-            box = box.move(motion);
-            if (tick < boostTicks) {
-                motion = ElytraLaunchPlanner.boost(motion, direction);
-            }
-        }
-        return motion.y >= -0.02;
     }
 
     static boolean threatens(AABB box, Vec3 motion, Rotation heading, int boostedTicks, Predicate<AABB> lava) {
@@ -156,15 +121,10 @@ final class ElytraLavaGuard {
                 && clearTicks(player, heading, boostTicks, 2, 0.25, fallingLava) == LOOKAHEAD;
     }
 
-    static boolean canContinueEscape(LocalPlayer player, Rotation heading, int boostTicks, FallingLava fallingLava) {
-        return clearTicks(player, heading, boostTicks, Double.NEGATIVE_INFINITY, fallingLava) == LOOKAHEAD
-                && (player.isInLava() || !threatens(player, heading, boostTicks, fallingLava));
-    }
-
     static Escape glideAside(LocalPlayer player, Rotation heading, Rotation current, int boostedTicks,
-                             UnaryOperator<Rotation> actualAim, FallingLava fallingLava, Vec3 towardGoal) {
+                             UnaryOperator<Rotation> actualAim, FallingLava fallingLava) {
         int currentClear = clearTicks(player, current, boostedTicks, Double.NEGATIVE_INFINITY, fallingLava);
-        return glideAside(heading, currentClear, towardGoal, candidate -> {
+        return glideAside(heading, currentClear, candidate -> {
             Rotation actual = actualAim.apply(candidate);
             int safeTicks = clearTicks(player, actual, boostedTicks, Double.NEGATIVE_INFINITY, fallingLava);
             return safeTicks == LOOKAHEAD && !player.isInLava() && threatens(player, actual, boostedTicks, fallingLava)
@@ -172,25 +132,17 @@ final class ElytraLavaGuard {
         });
     }
 
-    static Escape glideAside(Rotation heading, int currentlyClearTicks, Vec3 towardGoal, ToIntFunction<Rotation> clearance) {
+    static Escape glideAside(Rotation heading, int currentlyClearTicks, ToIntFunction<Rotation> clearance) {
         int bestTicks = currentlyClearTicks;
         Rotation best = null;
-        Escape reverse = null;
         float pitchAhead = Math.clamp(heading.getPitch(), -24f, 24f);
         float[] pitches = {pitchAhead * 0.75f, pitchAhead * 0.5f, 0, -12, LEVELING_PITCH, -24, -38, -52};
         for (int turn : TURNS) {
             for (float pitch : pitches) {
                 Rotation candidate = new Rotation(heading.getYaw() + turn, pitch);
-                boolean away = headsAway(candidate, towardGoal);
-                if (away && reverse != null) {
-                    continue;
-                }
                 int ticks = clearance.applyAsInt(candidate);
                 if (ticks == LOOKAHEAD) {
-                    if (!away) {
-                        return new Escape(candidate, true);
-                    }
-                    reverse = new Escape(candidate, true);
+                    return new Escape(candidate, true);
                 }
                 if (ticks > bestTicks) {
                     bestTicks = ticks;
@@ -198,14 +150,7 @@ final class ElytraLavaGuard {
                 }
             }
         }
-        if (reverse != null) {
-            return reverse;
-        }
         return best == null ? null : new Escape(best, false);
-    }
-
-    static boolean headsAway(Rotation heading, Vec3 towardGoal) {
-        return Vec3.directionFromRotation(0, heading.getYaw()).dot(towardGoal) < -0.1;
     }
 
     record Escape(Rotation rotation, boolean clearsHorizon) {}

@@ -68,9 +68,6 @@ import static baritone.utils.BaritoneMath.fastFloor;
 
 public final class ElytraBehavior implements Helper {
     private static final double LOW_SPEED_SQUARED = 0.9 * 0.9;
-    private static final int[] CLIMB_OFFSETS = {20, 10, 5, 0};
-    private static final int[] DESCENDING_OFFSETS = {0, 5, 10, 20};
-    private static final int[] NO_ALTITUDE_OFFSET = {0};
     private final Baritone baritone;
     private final IPlayerContext ctx;
 
@@ -101,10 +98,6 @@ public final class ElytraBehavior implements Helper {
     private int nextRocketDiagnostic;
     private Vec3 lastWallContact;
     private int lastWallContactTick;
-    private int unsafeBoostSince = -1;
-    private int lastUnsafeBoostTick;
-    private Rotation escapeHeading;
-    private int clearRouteTicks;
 
     public boolean landingMode;
 
@@ -162,6 +155,8 @@ public final class ElytraBehavior implements Helper {
         private int maxPlayerNear;
         private int ticksNearUnchanged;
         private int playerNear;
+        private int nextExtensionAttempt;
+        private int nextObstacleReplan;
 
         public PathManager() {
             // lol imagine initializing fields normally
@@ -237,14 +232,18 @@ public final class ElytraBehavior implements Helper {
             this.recalculating = true;
             final List<BetterBlockPos> after = upToIncl.isPresent() ? this.path.subList(upToIncl.getAsInt() + 1, this.path.size()) : Collections.emptyList();
             final boolean complete = this.completePath;
+            final BlockPos rejoin = upToIncl.isPresent() ? this.path.get(upToIncl.getAsInt()) : null;
+            this.nextObstacleReplan = ctx.player().tickCount + 20;
 
-            return this.path0(ctx.playerFeet(), upToIncl.isPresent() ? this.path.get(upToIncl.getAsInt()) : ElytraBehavior.this.destination, segment -> segment.append(after.stream(), upToIncl.isPresent() ? complete : segment.isFinished()))
+            return this.path0(ctx.playerFeet(), rejoin == null ? destination : rejoin,
+                    segment -> rejoin == null ? segment : segment.spliceAt(rejoin, after, complete))
                     .whenComplete((result, ex) -> {
                         this.recalculating = false;
                         if (ex != null) {
                             final Throwable cause = ex.getCause();
                             if (cause instanceof PathCalculationException) {
-                                logDirect("Failed to recompute segment");
+                                logVerbose("Could not reconnect to the next route segment");
+                                process.traceFlight("route-rejoin-failed", rejoin);
                             } else {
                                 logUnhandledException(cause);
                             }
@@ -263,7 +262,8 @@ public final class ElytraBehavior implements Helper {
             final long start = System.nanoTime();
             final BetterBlockPos pathStart = this.path.get(afterIncl);
 
-            this.path0(pathStart, ElytraBehavior.this.destination, segment -> segment.prepend(before.stream()))
+            this.nextExtensionAttempt = ctx.player().tickCount + 20;
+            this.path0(pathStart, ElytraBehavior.this.destination, segment -> segment.extendFrom(pathStart, before))
                     .thenRun(() -> {
                         final BetterBlockPos last = this.path.getLast();
                         if (last == null) {
@@ -282,10 +282,10 @@ public final class ElytraBehavior implements Helper {
                         if (ex != null) {
                             final Throwable cause = ex.getCause();
                             if (cause instanceof PathCalculationException) {
-                                logDirect("Failed to compute next segment");
+                                logVerbose("No extension found for the current route");
+                                process.traceFlight("route-extension-failed", pathStart);
                                 if (ctx.player().distanceToSqr(pathStart.getCenter()) < 16 * 16) {
-                                    logVerbose("Player is near the segment start, therefore repeating this calculation is pointless. Marking as complete");
-                                    completePath = true;
+                                    retryHazardRoute();
                                 }
                             } else {
                                 logUnhandledException(cause);
@@ -301,6 +301,8 @@ public final class ElytraBehavior implements Helper {
             this.playerNear = 0;
             this.ticksNearUnchanged = 0;
             this.maxPlayerNear = 0;
+            this.nextExtensionAttempt = 0;
+            this.nextObstacleReplan = 0;
         }
 
         private void setPath(final UnpackedSegment segment) {
@@ -314,6 +316,9 @@ public final class ElytraBehavior implements Helper {
                     logDirect("unable to land at " + ElytraBehavior.this.destination);
                     process.landingSpotIsBad(ElytraBehavior.this, new BetterBlockPos(ElytraBehavior.this.destination));
                 }
+            }
+            if (path.equals(this.path) && this.completePath == segment.isFinished()) {
+                return;
             }
             this.path = new NetherPath(path);
             this.completePath = segment.isFinished();
@@ -340,14 +345,19 @@ public final class ElytraBehavior implements Helper {
 
         // mickey resigned
         private CompletableFuture<Void> path0(BlockPos src, BlockPos dst, UnaryOperator<UnpackedSegment> operator) {
-            return context.pathFindAsync(src, dst, !landingMode && !appendDestination && dst.equals(destination))
+            return context.pathFindAsync(src, dst)
                     .thenApply(UnpackedSegment::from)
                     .thenApply(operator)
-                    .thenAcceptAsync(this::setPath, ctx.minecraft()::execute);
+                    .whenCompleteAsync((segment, error) -> {
+                        if (error == null) {
+                            this.setPath(segment);
+                        }
+                    }, ctx.minecraft()::execute)
+                    .thenApply(segment -> null);
         }
 
         private void pathfindAroundObstacles() {
-            if (this.recalculating) {
+            if (this.recalculating || ctx.player().tickCount < this.nextObstacleReplan) {
                 return;
             }
 
@@ -414,12 +424,12 @@ public final class ElytraBehavior implements Helper {
         }
 
         private void attemptNextSegment() {
-            if (this.recalculating) {
+            if (this.recalculating || ctx.player().tickCount < this.nextExtensionAttempt) {
                 return;
             }
 
             final int last = this.path.size() - 1;
-            if (!this.completePath && ctx.world().isLoaded(this.path.get(last))) {
+            if (!this.completePath && last >= 0 && ctx.world().isLoaded(this.path.get(last))) {
                 this.pathNextSegment(last);
             }
         }
@@ -570,8 +580,6 @@ public final class ElytraBehavior implements Helper {
 
     private void onTick0(boolean updatePath) {
         if (ctx.player().onGround() && !ctx.player().isFallFlying()) {
-            this.unsafeBoostSince = -1;
-            clearEscapeHeading();
         }
         // Fetch the previous solution, regardless of if it's going to be used
         this.pendingSolution = null;
@@ -642,9 +650,8 @@ public final class ElytraBehavior implements Helper {
         Rotation route = solution != null && solution.solvedPitch ? solution.rotation : null;
         FallingLava fallingLava = new FallingLava(ctx.world());
         Rotation heading = chooseHeading(route, fallingLava);
-        if (heading == null) {
+        if (route == null) {
             retryHazardRoute();
-            return;
         }
 
         var look = baritone.getLookBehavior();
@@ -669,86 +676,33 @@ public final class ElytraBehavior implements Helper {
     private Rotation chooseHeading(Rotation route, FallingLava fallingLava) {
         var player = ctx.player();
         var aim = baritone.getLookBehavior().getAimProcessor();
-        Rotation reference = route == null ? ctx.playerRotations() : route;
-        Rotation actual = route == null ? reference : aim.peekRotation(route);
+        Rotation current = ctx.playerRotations();
+        Rotation preferred = route == null ? current : route;
+        Rotation actual = route == null ? current : aim.peekRotation(route);
         int boostTicks = attachedBoostTicks();
         boolean inLava = player.isInLava();
+        boolean heat = inLava || ElytraLavaGuard.threatens(player, actual, boostTicks, fallingLava);
+        if (!heat && !ElytraLavaGuard.threatensWallSoon(player, actual, boostTicks)) {
+            return preferred;
+        }
         if (inLava) {
             baritone.getInputOverrideHandler().setInputForceState(Input.JUMP, true);
         }
-        boolean lowClearance = !inLava && boostTicks == 0 && runningOutOfClearance(actual, fallingLava);
-        boolean wall = player.horizontalCollision || ElytraLavaGuard.threatensWallSoon(player, actual, boostTicks);
-        boolean heat = inLava || lowClearance || ElytraLavaGuard.threatens(player, actual, boostTicks, fallingLava);
-        if (heat && !inLava && !lowClearance && !wall && route != null && actual.getPitch() >= 0) {
-            heat = !ElytraLavaGuard.canDescendAndLevel(player, actual, boostTicks, fallingLava);
-        }
-        boolean routeClear = route != null && !heat && !wall;
-        if (this.escapeHeading == null && !heat && !wall) {
-            return route;
-        }
 
-        this.clearRouteTicks = routeClear ? this.clearRouteTicks + 1 : 0;
-        boolean escapeClear = !lowClearance && this.escapeHeading != null
-                && ElytraLavaGuard.canContinueEscape(player, aim.peekRotation(this.escapeHeading), boostTicks, fallingLava);
-        if (routeClear && (!escapeClear || this.clearRouteTicks >= 4)) {
-            clearEscapeHeading();
-            this.process.traceFlight("escape-cruise-resumed", this.destination);
-            return route;
+        var escape = ElytraLavaGuard.glideAside(player, preferred, current, boostTicks, aim::peekRotation, fallingLava);
+        if (!inLava && escape != null && escape.clearsHorizon()) {
+            traceWallAvoidance("escape-heading-selected");
+            return escape.rotation();
         }
-        Vec3 towardGoal = cruiseGoalDirection(player.position());
-        boolean reviewReverse = escapeClear && player.tickCount % 8 == 0
-                && ElytraLavaGuard.headsAway(this.escapeHeading, towardGoal);
-        if (escapeClear && !reviewReverse) {
-            return this.escapeHeading;
-        }
-
-        boolean canBoost = boostTicks == 0 && this.remainingSetBackTicks <= 0 && this.rocketAckTicks == 0;
-        if (canBoost && (inLava || lowClearance)) {
-            Rotation boosted = tryLavaEscapeBoost(reference, fallingLava);
+        if (heat && boostTicks == 0 && this.remainingSetBackTicks <= 0 && this.rocketAckTicks == 0) {
+            Rotation boosted = tryLavaEscapeBoost(preferred, fallingLava);
             if (boosted != null) {
                 return boosted;
             }
         }
-        Rotation current = ctx.playerRotations();
-        var escape = ElytraLavaGuard.glideAside(player, reference, current, boostTicks, aim::peekRotation, fallingLava, towardGoal);
-        if (reviewReverse && (escape == null || !escape.clearsHorizon()
-                || ElytraLavaGuard.headsAway(escape.rotation(), towardGoal))) {
-            return this.escapeHeading;
-        }
-        if (escape == null || !escape.clearsHorizon()) {
-            if (heat && canBoost && !inLava && !lowClearance) {
-                Rotation boosted = tryLavaEscapeBoost(reference, fallingLava);
-                if (boosted != null) {
-                    return boosted;
-                }
-            }
-            retryHazardRoute();
-        }
-        if (escape != null) {
-            this.escapeHeading = escape.rotation();
-            traceWallAvoidance(escape.clearsHorizon() ? "escape-heading-selected" : "escape-partial-heading");
-            return this.escapeHeading;
-        }
-        if (routeClear) {
-            clearEscapeHeading();
-            return route;
-        }
-        traceWallAvoidance("escape-no-clear-heading");
-        this.escapeHeading = current;
-        return current;
-    }
-
-    private void clearEscapeHeading() {
-        this.escapeHeading = null;
-        this.clearRouteTicks = 0;
-    }
-
-    private boolean runningOutOfClearance(Rotation heading, FallingLava fallingLava) {
-        var player = ctx.player();
-        return !this.landingMode && !this.appendDestination && this.unsafeBoostSince >= 0
-                && player.tickCount - this.unsafeBoostSince >= 8 && player.tickCount - this.lastUnsafeBoostTick <= 24
-                && player.getDeltaMovement().horizontalDistanceSqr() < LOW_SPEED_SQUARED
-                && ElytraLavaGuard.runningOutOfClearance(player, heading, fallingLava);
+        retryHazardRoute();
+        traceWallAvoidance(escape == null ? "escape-no-clear-heading" : "escape-partial-heading");
+        return escape == null ? current : escape.rotation();
     }
 
     private Rotation tryLavaEscapeBoost(Rotation heading, FallingLava fallingLava) {
@@ -758,7 +712,6 @@ public final class ElytraBehavior implements Helper {
         if (escape == null || !useFirework(true, look.getAimProcessor().peekRotation(escape), ctx.player().isInLava())) {
             return null;
         }
-        this.escapeHeading = escape;
         this.process.traceFlight("escape-rocket", this.destination);
         return escape;
     }
@@ -798,23 +751,15 @@ public final class ElytraBehavior implements Helper {
         final NetherPath path = context.path;
         final int playerNear = landingMode ? path.size() - 1 : context.playerNear;
         final Vec3 start = context.start;
-        if (!this.landingMode && !this.appendDestination) {
-            Solution shortcut = solveStraightShortcut(context);
-            if (shortcut != null) {
-                return shortcut;
-            }
-        }
-        Vec3 towardGoal = cruiseGoalDirection(start);
-        Solution reverse = null;
         Solution solution = null;
 
         for (int relaxation = 0; relaxation < 3; relaxation++) { // try for a strict solution first, then relax more and more (if we're in a corner or near some blocks, it will have to relax its constraints a bit)
+            int[] heights = context.boost.isBoosted() ? new int[]{20, 10, 5, 0} : new int[]{0}; // attempt to gain height, if we can, so as not to waste the boost
             int lookahead = relaxation == 0 ? 2 : 3; // ideally this would be expressed as a distance in blocks, rather than a number of voxel steps
             //int minStep = Math.max(0, playerNear - relaxation);
             int minStep = playerNear;
 
             for (int i = Math.min(playerNear + 20, path.size() - 1); i >= minStep; i--) {
-                int[] heights = altitudeOffsets(context.boost.isBoosted(), start.y, landingMode ? start.y : path.getVec(i).y);
                 final List<Pair<Vec3, Integer>> candidates = new ArrayList<>();
                 for (int dy : heights) {
                     if (relaxation == 0 || i == minStep) {
@@ -848,10 +793,6 @@ public final class ElytraBehavior implements Helper {
                         dest = dest.add(0.5, 0.5, 0.5);
                     }
 
-                    boolean headsAway = dest.subtract(start).dot(towardGoal) < -0.5;
-                    if (headsAway && reverse != null) {
-                        continue;
-                    }
                     if (augment != 0) {
                         if (i + lookahead >= path.size()) {
                             continue;
@@ -884,66 +825,13 @@ public final class ElytraBehavior implements Helper {
                             continue;
                         }
 
-                        Solution candidateSolution = new Solution(context, new Rotation(yaw, pitch.first()), dest, true, pitch.second());
-                        // A safe return to an earlier part of the tunnel is still useful in a dead end.
-                        if (headsAway) {
-                            reverse = candidateSolution;
-                        } else {
-                            return candidateSolution;
-                        }
+                        // A solution was found with yaw AND pitch, so just immediately return it.
+                        return new Solution(context, new Rotation(yaw, pitch.first()), dest, true, pitch.second());
                     }
                 }
             }
         }
-        return reverse != null ? reverse : solution;
-    }
-
-    private Vec3 cruiseGoalDirection(Vec3 start) {
-        Vec3 delta = Vec3.atCenterOf(this.destination).subtract(start).multiply(1, 0, 1);
-        return this.landingMode || this.appendDestination || delta.horizontalDistanceSqr() < 48 * 48
-                ? Vec3.ZERO : delta.normalize();
-    }
-
-    private Solution solveStraightShortcut(SolverContext context) {
-        Vec3 toGoal = Vec3.atCenterOf(this.destination).subtract(context.start).multiply(1, 0, 1);
-        if (toGoal.horizontalDistanceSqr() < 48 * 48) {
-            return null;
-        }
-        Vec3 direction = toGoal.normalize();
-        double clearance = Baritone.settings().elytraMinimumAvoidance.value;
-        for (int i = Math.min(context.playerNear + 20, context.path.size() - 1); i > context.playerNear; i--) {
-            Vec3 rejoin = context.path.getVec(i);
-            Vec3 target = straightShortcutTarget(context.start, direction, rejoin);
-            if (target == null || !this.isHitboxClear(context, target, clearance)
-                    || !this.isHitboxClear(target, rejoin, context.boundingBox.move(target.subtract(context.start)),
-                            clearance, false)) {
-                continue;
-            }
-            var pitch = this.solvePitch(context, target, 1);
-            if (pitch != null) {
-                float yaw = RotationUtils.calcRotationFromVec3d(context.start, target, ctx.playerRotations()).getYaw();
-                return new Solution(context, new Rotation(yaw, pitch.first()), target, true, pitch.second());
-            }
-            break;
-        }
-        return null;
-    }
-
-    static Vec3 straightShortcutTarget(Vec3 start, Vec3 direction, Vec3 rejoin) {
-        double ahead = rejoin.subtract(start).dot(direction);
-        if (ahead < 16 || ahead > 48) {
-            return null;
-        }
-        Vec3 target = start.add(direction.scale(ahead)).add(0, rejoin.y - start.y, 0);
-        double lateral = target.distanceToSqr(rejoin);
-        return lateral >= 1.5 * 1.5 && lateral <= 8 * 8 ? target : null;
-    }
-
-    static int[] altitudeOffsets(boolean boostedCruise, double currentY, double routeY) {
-        if (!boostedCruise) {
-            return NO_ALTITUDE_OFFSET;
-        }
-        return currentY - routeY >= 4 ? DESCENDING_OFFSETS : CLIMB_OFFSETS;
+        return solution;
     }
 
     private Rotation boostIfSlow(Rotation heading, Solution route, FallingLava fallingLava) {
@@ -974,24 +862,11 @@ public final class ElytraBehavior implements Helper {
             target = heading.withPitch(0);
             actual = aim.peekRotation(target);
             if (heading.getPitch() == 0 || !ElytraLaunchPlanner.canBoost(player, actual, fallingLava)) {
-                if (this.unsafeBoostSince < 0 || tick - this.lastUnsafeBoostTick > 24) {
-                    this.unsafeBoostSince = tick;
-                }
-                this.lastUnsafeBoostTick = tick;
-                if (tick - this.unsafeBoostSince >= 20) {
-                    retryHazardRoute();
-                }
                 traceWallAvoidance("rocket-held-unsafe-corridor");
                 return heading;
             }
         }
-        if (!useFirework(forced, actual)) {
-            return heading;
-        }
-        if (route == null || target != heading) {
-            this.escapeHeading = target;
-        }
-        return target;
+        return useFirework(forced, actual) ? target : heading;
     }
 
     static boolean belowBoostSpeed(Vec3 motion, double threshold) {
@@ -1044,7 +919,6 @@ public final class ElytraBehavior implements Helper {
             return waitForRocket("rocket-use-rejected");
         }
         this.rocketsBeforeUse = before;
-        this.unsafeBoostSince = -1;
         this.rocketAckTicks = 10;
         this.minimumBoostTicks = 10 * (1 + duration);
         this.remainingFireworkTicks = 10;
