@@ -4,7 +4,7 @@
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/Duuuuiiii/BetterBaritone/releases) 下载 **0.1.45 完整替换版**。需要独立搭配官方 Baritone 的玩家可下载 [0.1.16 附加版](https://github.com/Duuuuiiii/BetterBaritone/releases/tag/v0.1.16)。
+从 [GitHub Releases](https://github.com/Duuuuiiii/BetterBaritone/releases) 下载 **0.1.46 完整替换版**。需要独立搭配官方 Baritone 的玩家可下载 [0.1.16 附加版](https://github.com/Duuuuiiii/BetterBaritone/releases/tag/v0.1.16)。
 
 | 版本 | 放进 `mods` 的文件 |
 | --- | --- |
@@ -13,7 +13,7 @@
 
 附加版使用官方 Baritone 寻路。使用 `standalone`、`api` 或客户端内置版的玩家，请先切换到上表指定的 `unoptimized` 版本。完整替换版提供额外的地狱脱困和飞行诊断。
 
-0.1.45 保留 0.1.12 的飞行代码，并合入 0.1.16 的挖矿兼容代码。原版 Tanghulu 1.0.7 可以直接搭配使用。
+0.1.46 更新长距离分段寻路，沿用 0.1.45 的飞行控制和 Tanghulu 1.0.7 挖矿兼容。
 
 ## 快速上手
 
@@ -29,8 +29,9 @@ HUD 可调整位置和偏移，也可关闭。界面默认中文，可在 HUD �
 
 ## 构建与反馈
 
+- **0.1.46** 的构建需先运行 `./gradlew test :fabric:remapJar -Pavailable_loaders=fabric,tweaker` 生成新版寻路类，再运行 `python scripts/build-0.1.46.py <0.1.45.jar> fabric/build/libs/BetterBaritone-0.1.44.jar BetterBaritone-0.1.46.jar`。
 - **0.1.45** 由已归档的 0.1.12 和 0.1.16 完整 JAR 组装。运行 `python scripts/build-0.1.45.py <0.1.12.jar> <0.1.16.jar> BetterBaritone-0.1.45.jar` 可复现。脚本校验两个输入的 SHA-256，只替换挖矿相关的三个类和版本号。
-- 运行 `./gradlew test :fabric:remapJar -Pavailable_loaders=fabric,tweaker` 从当前 Gradle 源码构建 **0.1.44** 完整替换版，产物在 `fabric/build/libs`。
+- 运行 `./gradlew test :fabric:remapJar -Pavailable_loaders=fabric,tweaker` 构建当前源码的完整替换版，产物在 `fabric/build/libs`。
 - 反馈问题时附上模组版本、目标坐标和复现步骤。完整替换版的飞行日志在实例目录下的 `baritone/logs/flight.log`。[提交反馈](https://github.com/Duuuuiiii/BetterBaritone/issues)
 
 基于 [Baritone](https://github.com/cabaletta/baritone) 开发，感谢上游贡献者。[许可证](LICENSE)

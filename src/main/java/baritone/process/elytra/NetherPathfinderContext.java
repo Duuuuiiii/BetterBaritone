@@ -19,6 +19,7 @@ package baritone.process.elytra;
 
 import baritone.Baritone;
 import baritone.api.event.events.BlockChangeEvent;
+import baritone.api.utils.BetterBlockPos;
 import baritone.utils.accessor.IPalettedContainer;
 import dev.babbaj.pathfinder.NetherPathfinder;
 import dev.babbaj.pathfinder.Octree;
@@ -103,20 +104,61 @@ public final class NetherPathfinderContext {
 
     public CompletableFuture<PathSegment> pathFindAsync(final BlockPos src, final BlockPos dst) {
         return CompletableFuture.supplyAsync(() -> {
-            final PathSegment segment = NetherPathfinder.pathFind(
-                    this.context,
-                    src.getX(), src.getY(), src.getZ(),
-                    dst.getX(), dst.getY(), dst.getZ(),
-                    true,
-                    false,
-                    10000,
-                    !Baritone.settings().elytraPredictTerrain.value
-            );
-            if (segment == null) {
+            boolean airIfFake = !Baritone.settings().elytraPredictTerrain.value;
+            PathSegment original = findPath(src, dst, 10000, airIfFake);
+            if (original == null) {
                 throw new PathCalculationException("Path calculation failed");
             }
-            return segment;
+            if (!LongRangeElytraRoute.shouldCompare(src, dst, original) || Thread.currentThread().isInterrupted()) {
+                return original;
+            }
+
+            Vec3 toward = dst.getCenter().subtract(src.getCenter()).multiply(1, 0, 1).normalize();
+            BlockPos guide = findLoadedGuide(src, toward);
+            if (guide == null) {
+                return original;
+            }
+            PathSegment approach = findPath(src, guide, 160, airIfFake);
+            if (approach == null || !approach.finished || approach.packed.length < 2
+                    || Thread.currentThread().isInterrupted()) {
+                return original;
+            }
+            var join = BetterBlockPos.deserializeFromLong(approach.packed[approach.packed.length - 1]);
+            if (!hasChunk(new ChunkPos(join)) || join.distSqr(guide) > 8 * 8) {
+                return original;
+            }
+            for (int i = 1; i < approach.packed.length; i++) {
+                var from = BetterBlockPos.deserializeFromLong(approach.packed[i - 1]);
+                var to = BetterBlockPos.deserializeFromLong(approach.packed[i]);
+                if (!hasChunk(new ChunkPos(to)) || !raytrace(from.getCenter(), to.getCenter())) {
+                    return original;
+                }
+            }
+            return LongRangeElytraRoute.choose(src, dst, original, approach, findPath(join, dst, 200, airIfFake));
         }, this.executor);
+    }
+
+    private PathSegment findPath(BlockPos src, BlockPos dst, int timeoutMs, boolean airIfFake) {
+        return NetherPathfinder.pathFind(this.context, src.getX(), src.getY(), src.getZ(),
+                dst.getX(), dst.getY(), dst.getZ(), true, false, timeoutMs, airIfFake);
+    }
+
+    private BlockPos findLoadedGuide(BlockPos src, Vec3 toward) {
+        BlockPos column = BlockPos.containing(src.getCenter().add(toward.scale(64)));
+        if (!hasChunk(new ChunkPos(column))) {
+            return null;
+        }
+        for (int offset : new int[]{0, -8, 8, -16, 16}) {
+            BlockPos candidate = column.offset(0, offset, 0);
+            if (candidate.getY() < 4 || candidate.getY() > 123) {
+                continue;
+            }
+            Vec3 center = candidate.getCenter();
+            if (raytrace(center.add(0, -1, 0), center.add(0, 1, 0))) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     /**
