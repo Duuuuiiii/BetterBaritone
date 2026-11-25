@@ -34,8 +34,6 @@ final class ElytraLavaGuard {
     private static final int SLOW_GLIDE_LOOKAHEAD = 36;
     private static final int DESCENT_LOOKAHEAD = 24;
     private static final int INERTIA_LOOKAHEAD = 5;
-    private static final int WALL_LOOKAHEAD = 8;
-    private static final int BOOSTED_WALL_LOOKAHEAD = 12;
     private static final float LEVELING_PITCH = -16f;
     private static final int[] TURNS = {0, 25, -25, 55, -55, 90, -90, 135, -135, 180};
     private static final int[] CLIMB_ANGLES = {-24, -38, -52, -14};
@@ -66,28 +64,6 @@ final class ElytraLavaGuard {
         for (int tick = 0; tick < horizon; tick++) {
             motion = ElytraLaunchPlanner.glide(motion, direction, heading.getPitch());
             if (crossesHeat(box, motion, lava)) {
-                return true;
-            }
-            box = box.move(motion);
-            if (tick < boostedTicks) {
-                motion = ElytraLaunchPlanner.boost(motion, direction);
-            }
-        }
-        return false;
-    }
-
-    static boolean threatensWallSoon(LocalPlayer player, Rotation heading, int boostedTicks) {
-        return threatensWall(player.getBoundingBox(), player.getDeltaMovement(), heading, boostedTicks,
-                box -> !chunksLoaded(player, box) || hitsSolid(player, box));
-    }
-
-    static boolean threatensWall(AABB box, Vec3 motion, Rotation heading, int boostedTicks,
-                                 Predicate<AABB> solid) {
-        int horizon = boostedTicks > 0 ? BOOSTED_WALL_LOOKAHEAD : WALL_LOOKAHEAD;
-        Vec3 direction = look(heading);
-        for (int tick = 0; tick < horizon; tick++) {
-            motion = ElytraLaunchPlanner.glide(motion, direction, heading.getPitch());
-            if (!clearsSolids(box, motion, solid.negate())) {
                 return true;
             }
             box = box.move(motion);

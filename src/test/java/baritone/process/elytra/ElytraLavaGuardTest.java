@@ -78,28 +78,11 @@ public class ElytraLavaGuardTest {
     }
 
     @Test
-    public void detectsWallOnlyWhenThePlannedBoostReachesIt() {
-        var player = new AABB(-0.3, 45, -0.3, 0.3, 45.6, 0.3);
-        var heading = new Rotation(0, 0);
-        assertFalse(ElytraLavaGuard.threatensWall(player, Vec3.ZERO, heading, 0, box -> box.maxZ > 6));
-        assertTrue(ElytraLavaGuard.threatensWall(player, Vec3.ZERO, heading, 10, box -> box.maxZ > 6));
-    }
-
-    @Test
     public void refusesTheEarlyReboostAfterWallDamageNearTheSameSpot() {
         assertFalse(ElytraBehavior.canBoostAfterWall(15, 0.03));
         assertFalse(ElytraBehavior.canBoostAfterWall(11, 16));
         assertTrue(ElytraBehavior.canBoostAfterWall(15, 16));
         assertTrue(ElytraBehavior.canBoostAfterWall(40, 0.03));
-    }
-
-    @Test
-    public void detectsCollisionInNegativeDirectionButCanSteerOffAContact() {
-        var player = new AABB(-0.3, 45, -0.3, 0.3, 45.6, 0.3);
-        assertTrue(ElytraLavaGuard.threatensWall(player, new Vec3(0, 0, -1), new Rotation(180, 0),
-                0, box -> box.minZ < -4));
-        assertFalse(ElytraLavaGuard.threatensWall(player, new Vec3(0, 0, 0.5), new Rotation(0, 0),
-                0, box -> box.minZ <= player.minZ));
     }
 
     @Test

@@ -698,7 +698,7 @@ public final class ElytraBehavior implements Helper {
         int boostTicks = attachedBoostTicks();
         boolean inLava = player.isInLava();
         boolean heat = inLava || ElytraLavaGuard.threatens(player, actual, boostTicks, fallingLava);
-        if (!heat && !ElytraLavaGuard.threatensWallSoon(player, actual, boostTicks)) {
+        if (!heat) {
             return preferred;
         }
         if (inLava) {
@@ -707,7 +707,7 @@ public final class ElytraBehavior implements Helper {
 
         var escape = ElytraLavaGuard.glideAside(player, preferred, current, boostTicks, aim::peekRotation, fallingLava);
         if (!inLava && escape != null && escape.clearsHorizon()) {
-            traceWallAvoidance("escape-heading-selected");
+            traceFlightDecision("escape-heading-selected");
             return escape.rotation();
         }
         if (heat && boostTicks == 0 && this.remainingSetBackTicks <= 0 && this.rocketAckTicks == 0) {
@@ -717,7 +717,7 @@ public final class ElytraBehavior implements Helper {
             }
         }
         retryHazardRoute();
-        traceWallAvoidance(escape == null ? "escape-no-clear-heading" : "escape-partial-heading");
+        traceFlightDecision(escape == null ? "escape-no-clear-heading" : "escape-partial-heading");
         return escape == null ? current : escape.rotation();
     }
 
@@ -743,7 +743,7 @@ public final class ElytraBehavior implements Helper {
         }
     }
 
-    private void traceWallAvoidance(String event) {
+    private void traceFlightDecision(String event) {
         int tick = ctx.player().tickCount;
         if (tick >= this.nextWallDiagnostic) {
             this.nextWallDiagnostic = tick + 20;
@@ -878,7 +878,7 @@ public final class ElytraBehavior implements Helper {
             target = heading.withPitch(0);
             actual = aim.peekRotation(target);
             if (heading.getPitch() == 0 || !ElytraLaunchPlanner.canBoost(player, actual, fallingLava)) {
-                traceWallAvoidance("rocket-held-unsafe-corridor");
+                traceFlightDecision("rocket-held-unsafe-corridor");
                 return heading;
             }
         }
