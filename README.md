@@ -4,7 +4,7 @@
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/Duuuuiiii/BetterBaritone/releases) 下载 **0.1.42 完整替换版**。需要独立搭配官方 Baritone 的玩家可下载 [0.1.16 附加版](https://github.com/Duuuuiiii/BetterBaritone/releases/tag/v0.1.16)。
+从 [GitHub Releases](https://github.com/Duuuuiiii/BetterBaritone/releases) 下载 **0.1.43 完整替换版**。需要独立搭配官方 Baritone 的玩家可下载 [0.1.16 附加版](https://github.com/Duuuuiiii/BetterBaritone/releases/tag/v0.1.16)。
 
 | 版本 | 放进 `mods` 的文件 |
 | --- | --- |
@@ -29,7 +29,7 @@ HUD 可调整位置和偏移，也可关闭。界面默认中文，可在 HUD �
 
 ## 构建与反馈
 
-- 当前版本为 **0.1.42**。
+- 当前版本为 **0.1.43**。
 - 运行 `./gradlew test :fabric:remapJar -Pavailable_loaders=fabric,tweaker` 构建完整替换版，产物在 `fabric/build/libs`。
 - 反馈问题时附上模组版本、目标坐标和复现步骤。完整替换版的飞行日志在实例目录下的 `baritone/logs/flight.log`。[提交反馈](https://github.com/Duuuuiiii/BetterBaritone/issues)
 

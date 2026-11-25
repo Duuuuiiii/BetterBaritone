@@ -93,6 +93,7 @@ public final class ElytraBehavior implements Helper {
      */
     private int remainingSetBackTicks;
     private int nextHazardReplan;
+    private boolean destroyed;
     private int nextWallDiagnostic;
     private int nextRocketAttempt;
     private int nextRocketDiagnostic;
@@ -237,13 +238,27 @@ public final class ElytraBehavior implements Helper {
 
             return this.path0(ctx.playerFeet(), rejoin == null ? destination : rejoin,
                     segment -> rejoin == null ? segment : segment.spliceAt(rejoin, after, complete))
+                    .exceptionallyCompose(error -> {
+                        var player = ctx.player();
+                        if (rejoin == null || !(error.getCause() instanceof PathCalculationException)
+                                || player == null || ElytraBehavior.this.destroyed) {
+                            return CompletableFuture.failedFuture(error);
+                        }
+                        // Keeping the old route is useful while searching, but retrying its blocked
+                        // rejoin point would keep pulling the player back to the same corridor.
+                        this.nextObstacleReplan = player.tickCount + 60;
+                        ElytraBehavior.this.nextHazardReplan = player.tickCount + 100;
+                        process.traceFlight("route-rejoin-failed", rejoin);
+                        process.traceFlight("route-replan-from-player", destination);
+                        return this.path0(ctx.playerFeet(), destination, UnaryOperator.identity());
+                    })
                     .whenComplete((result, ex) -> {
                         this.recalculating = false;
                         if (ex != null) {
                             final Throwable cause = ex.getCause();
                             if (cause instanceof PathCalculationException) {
-                                logVerbose("Could not reconnect to the next route segment");
-                                process.traceFlight("route-rejoin-failed", rejoin);
+                                logVerbose("Could not find a replacement route");
+                                process.traceFlight("route-replan-failed", destination);
                             } else {
                                 logUnhandledException(cause);
                             }
@@ -349,7 +364,7 @@ public final class ElytraBehavior implements Helper {
                     .thenApply(UnpackedSegment::from)
                     .thenApply(operator)
                     .whenCompleteAsync((segment, error) -> {
-                        if (error == null) {
+                        if (error == null && !ElytraBehavior.this.destroyed) {
                             this.setPath(segment);
                         }
                     }, ctx.minecraft()::execute)
@@ -531,6 +546,7 @@ public final class ElytraBehavior implements Helper {
     }
 
     public void destroy() {
+        this.destroyed = true;
         if (this.solver != null) {
             this.solver.cancel(true);
         }
