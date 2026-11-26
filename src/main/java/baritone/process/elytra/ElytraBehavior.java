@@ -158,6 +158,9 @@ public final class ElytraBehavior implements Helper {
         private int playerNear;
         private int nextExtensionAttempt;
         private int nextObstacleReplan;
+        private Vec3 lastCollisionPosition;
+        private int lastCollisionTick;
+        private boolean touchingBlock;
 
         public PathManager() {
             // lol imagine initializing fields normally
@@ -176,9 +179,37 @@ public final class ElytraBehavior implements Helper {
                 this.ticksNearUnchanged = 0;
             }
 
+            if (replanAfterRepeatedContact()) {
+                return;
+            }
             // Obstacles are more important than an incomplete path, handle those first.
             this.pathfindAroundObstacles();
             this.attemptNextSegment();
+        }
+
+        private boolean replanAfterRepeatedContact() {
+            var player = ctx.player();
+            boolean contact = player.isFallFlying() && !player.onGround()
+                    && (player.horizontalCollision || player.verticalCollision);
+            boolean started = contact && !this.touchingBlock;
+            this.touchingBlock = contact;
+            if (!started || landingMode || appendDestination) {
+                return false;
+            }
+
+            int tick = player.tickCount;
+            Vec3 position = player.position();
+            boolean repeated = this.lastCollisionPosition != null
+                    && tick - this.lastCollisionTick <= 80
+                    && position.distanceToSqr(this.lastCollisionPosition) <= 12 * 12;
+            this.lastCollisionPosition = position;
+            this.lastCollisionTick = tick;
+            if (!repeated || tick < this.nextObstacleReplan || !retryDestination()) {
+                return false;
+            }
+            this.nextObstacleReplan = tick + 60;
+            process.traceFlight("wall-contact-reroute", destination);
+            return true;
         }
 
         public CompletableFuture<Void> pathToDestination() {
@@ -241,13 +272,12 @@ public final class ElytraBehavior implements Helper {
                     .exceptionallyCompose(error -> {
                         var player = ctx.player();
                         if (rejoin == null || !(error.getCause() instanceof PathCalculationException)
-                                || player == null || ElytraBehavior.this.destroyed) {
+                                || player == null || context.isClosed()) {
                             return CompletableFuture.failedFuture(error);
                         }
                         // Keeping the old route is useful while searching, but retrying its blocked
                         // rejoin point would keep pulling the player back to the same corridor.
                         this.nextObstacleReplan = player.tickCount + 60;
-                        ElytraBehavior.this.nextHazardReplan = player.tickCount + 100;
                         process.traceFlight("route-rejoin-failed", rejoin);
                         process.traceFlight("route-replan-from-player", destination);
                         return this.path0(ctx.playerFeet(), destination, UnaryOperator.identity());
@@ -279,6 +309,18 @@ public final class ElytraBehavior implements Helper {
 
             this.nextExtensionAttempt = ctx.player().tickCount + 20;
             this.path0(pathStart, ElytraBehavior.this.destination, segment -> segment.extendFrom(pathStart, before))
+                    .exceptionallyCompose(error -> {
+                        var player = ctx.player();
+                        if (!(error.getCause() instanceof PathCalculationException) || player == null
+                                || context.isClosed() || landingMode || appendDestination
+                                || player.distanceToSqr(pathStart.getCenter()) > 32 * 32) {
+                            return CompletableFuture.failedFuture(error);
+                        }
+                        this.nextExtensionAttempt = player.tickCount + 60;
+                        this.nextObstacleReplan = this.nextExtensionAttempt;
+                        process.traceFlight("route-extension-replan-from-player", destination);
+                        return this.path0(ctx.playerFeet(), destination, UnaryOperator.identity());
+                    })
                     .thenRun(() -> {
                         final BetterBlockPos last = this.path.getLast();
                         if (last == null) {
@@ -299,9 +341,6 @@ public final class ElytraBehavior implements Helper {
                             if (cause instanceof PathCalculationException) {
                                 logVerbose("No extension found for the current route");
                                 process.traceFlight("route-extension-failed", pathStart);
-                                if (ctx.player().distanceToSqr(pathStart.getCenter()) < 16 * 16) {
-                                    retryHazardRoute();
-                                }
                             } else {
                                 logUnhandledException(cause);
                             }
@@ -318,6 +357,8 @@ public final class ElytraBehavior implements Helper {
             this.maxPlayerNear = 0;
             this.nextExtensionAttempt = 0;
             this.nextObstacleReplan = 0;
+            this.lastCollisionPosition = null;
+            this.touchingBlock = false;
         }
 
         private void setPath(final UnpackedSegment segment) {
@@ -364,7 +405,7 @@ public final class ElytraBehavior implements Helper {
                     .thenApply(UnpackedSegment::from)
                     .thenApply(operator)
                     .whenCompleteAsync((segment, error) -> {
-                        if (error == null && !ElytraBehavior.this.destroyed) {
+                        if (error == null && !context.isClosed()) {
                             this.setPath(segment);
                         }
                     }, ctx.minecraft()::execute)

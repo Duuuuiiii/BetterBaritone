@@ -211,6 +211,10 @@ public final class NetherPathfinderContext {
         NetherPathfinder.raytrace(this.context, NetherPathfinder.CACHE_MISS_SOLID, count, src, dst, hitsOut, hitPosOut);
     }
 
+    boolean isClosed() {
+        return this.executor.isShutdown();
+    }
+
     public void cancel() {
         NetherPathfinder.cancel(this.context);
     }
