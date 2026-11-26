@@ -105,7 +105,11 @@ public final class NetherPathfinderContext {
     public CompletableFuture<PathSegment> pathFindAsync(final BlockPos src, final BlockPos dst) {
         return CompletableFuture.supplyAsync(() -> {
             boolean airIfFake = !Baritone.settings().elytraPredictTerrain.value;
-            PathSegment original = findPath(src, dst, 10000, airIfFake);
+            PathSegment original = findPath(src, dst, 1000, airIfFake, true);
+            if (LongRangeElytraRoute.shouldTryFine(src, dst, original) && !Thread.currentThread().isInterrupted()) {
+                PathSegment fine = findPath(src, dst, 1000, airIfFake, false);
+                original = LongRangeElytraRoute.chooseFine(src, dst, original, fine);
+            }
             if (original == null) {
                 throw new PathCalculationException("Path calculation failed");
             }
@@ -118,7 +122,7 @@ public final class NetherPathfinderContext {
             if (guide == null) {
                 return original;
             }
-            PathSegment approach = findPath(src, guide, 160, airIfFake);
+            PathSegment approach = findPath(src, guide, 160, airIfFake, true);
             if (approach == null || !approach.finished || approach.packed.length < 2
                     || Thread.currentThread().isInterrupted()) {
                 return original;
@@ -134,13 +138,13 @@ public final class NetherPathfinderContext {
                     return original;
                 }
             }
-            return LongRangeElytraRoute.choose(src, dst, original, approach, findPath(join, dst, 200, airIfFake));
+            return LongRangeElytraRoute.choose(src, dst, original, approach, findPath(join, dst, 200, airIfFake, true));
         }, this.executor);
     }
 
-    private PathSegment findPath(BlockPos src, BlockPos dst, int timeoutMs, boolean airIfFake) {
+    private PathSegment findPath(BlockPos src, BlockPos dst, int timeoutMs, boolean airIfFake, boolean coarseGrid) {
         return NetherPathfinder.pathFind(this.context, src.getX(), src.getY(), src.getZ(),
-                dst.getX(), dst.getY(), dst.getZ(), true, false, timeoutMs, airIfFake);
+                dst.getX(), dst.getY(), dst.getZ(), coarseGrid, false, timeoutMs, airIfFake);
     }
 
     private BlockPos findLoadedGuide(BlockPos src, Vec3 toward) {

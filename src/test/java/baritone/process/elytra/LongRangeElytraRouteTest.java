@@ -54,6 +54,19 @@ public class LongRangeElytraRouteTest {
         }
     }
 
+    @Test
+    public void triesTheFinerGridWhenTheCoarseSearchGetsNowhere() {
+        var shortRoute = new PathSegment(false, new long[]{ORIGIN, node(8, 0)});
+        var narrowPassage = new PathSegment(false, new long[]{ORIGIN, node(24, 12)});
+        var worse = new PathSegment(false, new long[]{ORIGIN, node(-12, 0)});
+        assertTrue(LongRangeElytraRoute.shouldTryFine(START, GOAL, null));
+        assertTrue(LongRangeElytraRoute.shouldTryFine(START, GOAL, shortRoute));
+        assertFalse(LongRangeElytraRoute.shouldTryFine(START, GOAL, BASE));
+        assertSame(narrowPassage, LongRangeElytraRoute.chooseFine(START, GOAL, shortRoute, narrowPassage));
+        assertSame(shortRoute, LongRangeElytraRoute.chooseFine(START, GOAL, shortRoute, worse));
+        assertSame(shortRoute, LongRangeElytraRoute.chooseFine(START, GOAL, shortRoute, null));
+    }
+
     private static long node(int x, int z) {
         return BetterBlockPos.serializeToLong(x, 64, z);
     }

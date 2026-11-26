@@ -4,7 +4,7 @@
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/Duuuuiiii/BetterBaritone/releases) 下载 **0.1.46 完整替换版**。需要独立搭配官方 Baritone 的玩家可下载 [0.1.16 附加版](https://github.com/Duuuuiiii/BetterBaritone/releases/tag/v0.1.16)。
+从 [GitHub Releases](https://github.com/Duuuuiiii/BetterBaritone/releases) 下载 **0.1.47 完整替换版**。需要独立搭配官方 Baritone 的玩家可下载 [0.1.16 附加版](https://github.com/Duuuuiiii/BetterBaritone/releases/tag/v0.1.16)。
 
 | 版本 | 放进 `mods` 的文件 |
 | --- | --- |
@@ -29,6 +29,7 @@ HUD 可调整位置和偏移，也可关闭。界面默认中文，可在 HUD �
 
 ## 构建与反馈
 
+- **0.1.47** 复用下方 Gradle 构建步骤，再运行 `python scripts/build-0.1.47.py <0.1.46.jar> fabric/build/libs/BetterBaritone-0.1.44.jar BetterBaritone-0.1.47.jar`。
 - **0.1.46** 的构建需先运行 `./gradlew test :fabric:remapJar -Pavailable_loaders=fabric,tweaker` 生成新版寻路类，再运行 `python scripts/build-0.1.46.py <0.1.45.jar> fabric/build/libs/BetterBaritone-0.1.44.jar BetterBaritone-0.1.46.jar`。
 - **0.1.45** 由已归档的 0.1.12 和 0.1.16 完整 JAR 组装。运行 `python scripts/build-0.1.45.py <0.1.12.jar> <0.1.16.jar> BetterBaritone-0.1.45.jar` 可复现。脚本校验两个输入的 SHA-256，只替换挖矿相关的三个类和版本号。
 - 运行 `./gradlew test :fabric:remapJar -Pavailable_loaders=fabric,tweaker` 构建当前源码的完整替换版，产物在 `fabric/build/libs`。

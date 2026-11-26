@@ -30,6 +30,31 @@ final class LongRangeElytraRoute {
 
     private LongRangeElytraRoute() {}
 
+    static boolean shouldTryFine(BlockPos start, BlockPos goal, PathSegment coarse) {
+        return coarse == null || !coarse.finished
+                && horizontalDistance(start.getCenter(), goal.getCenter()) >= 48
+                && progress(start, goal, coarse) < 16;
+    }
+
+    static PathSegment chooseFine(BlockPos start, BlockPos goal, PathSegment coarse, PathSegment fine) {
+        if (fine == null || fine.packed.length < 2) {
+            return coarse;
+        }
+        if (coarse == null || fine.finished || progress(start, goal, fine) >= progress(start, goal, coarse) + 8) {
+            return fine;
+        }
+        return coarse;
+    }
+
+    private static double progress(BlockPos start, BlockPos goal, PathSegment segment) {
+        if (segment.packed.length == 0) {
+            return 0;
+        }
+        Vec3 target = goal.getCenter();
+        Vec3 end = BetterBlockPos.deserializeFromLong(segment.packed[segment.packed.length - 1]).getCenter();
+        return horizontalDistance(start.getCenter(), target) - horizontalDistance(end, target);
+    }
+
     static boolean shouldCompare(BlockPos start, BlockPos goal, PathSegment original) {
         return !original.finished && horizontalDistance(start.getCenter(), goal.getCenter()) >= 256
                 && efficiency(start, goal, original.packed) < 0.97;
