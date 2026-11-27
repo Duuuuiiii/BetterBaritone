@@ -33,6 +33,7 @@
     "MixinRenderType",
     "MixinScreen",
     "MixinElytraGroundLaunch",
+    "MixinElytraSurveyScreen",
     "MixinTweakerooCameraUtils",
     "MixinWorldRenderer"
   ],

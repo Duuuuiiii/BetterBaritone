@@ -38,8 +38,15 @@ public final class ElytraKeybinds {
                 if (pause && !this.pauseDown) {
                     process.toggleFlightPause();
                 } else if (takeover && !this.takeoverDown) {
-                    process.takeOver();
+                    if (ElytraSurvey.INSTANCE.isActive()) {
+                        ElytraSurvey.INSTANCE.stop();
+                    } else {
+                        process.takeOver();
+                    }
                 } else if (land && !this.landDown) {
+                    if (ElytraSurvey.INSTANCE.isActive()) {
+                        ElytraSurvey.INSTANCE.finish(ElytraUi.text("探索已结束，正在降落", "Exploration ended, landing"));
+                    }
                     process.requestLanding();
                 }
             }
@@ -47,6 +54,7 @@ public final class ElytraKeybinds {
                 client.setScreen(new ElytraFlightScreen());
             }
         }
+        ElytraSurvey.INSTANCE.tick(client);
         this.settingsDown = open;
         this.takeoverDown = takeover;
         this.landDown = land;

@@ -4,7 +4,7 @@
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/Duuuuiiii/BetterBaritone/releases) 下载 **0.1.50 完整替换版**。需要独立搭配官方 Baritone 的玩家可下载 [0.1.16 附加版](https://github.com/Duuuuiiii/BetterBaritone/releases/tag/v0.1.16)。
+从 [GitHub Releases](https://github.com/Duuuuiiii/BetterBaritone/releases) 下载 **0.1.51 完整替换版**。需要独立搭配官方 Baritone 的玩家可下载 [0.1.16 附加版](https://github.com/Duuuuiiii/BetterBaritone/releases/tag/v0.1.16)。
 
 | 版本 | 放进 `mods` 的文件 |
 | --- | --- |
@@ -23,12 +23,22 @@
 
 HUD 可调整位置和偏移，也可关闭。界面默认中文，可在 HUD 页切换英文。规划路线和飞行预测线可分别开关和改色，背包补给可把烟花和食物移到指定的快捷栏槽位。
 
+## 下界探索
+
+进入下界后按 **F6**，点击面板右上方的「探索」。可设置中心 X/Z、方形范围半径、候选点间距或圈距、换点距离和目标数量上限。上限为 0 时会继续寻找新目标。
+
+- **随机探索**在范围内随机选点，受最短与最长航段限制，并优先选择预估重叠较少的方向。
+- **螺旋扫图**从中心沿方形螺旋向外扩展，支持四个起始方向和顺、逆时针。
+
+已飞过的 32 × 32 格区域和探索设置按世界及玩家保存在本地，再次打开会读回。两种模式共用探索记录，途中仍可能需要经过已飞区域。沿用原飞行的暂停键，或点「结束并接管」停止探索。
+
 ## 消耗怎么估算
 
 模组在本地记录实际飞行距离、烟花用量和鞘翅耐久损耗。用历史平均每格消耗乘以当前的 **XZ 直线距离**，得到这趟的预估。比如飞 1 万格平均用 64 发烟花，剩 5 万格就预计用 320 发，也就是 5 组。鞘翅损耗折算为满耐久鞘翅数量。飞行中会逐步改用本趟接近终点的速度和烟花用量，并显示本趟已用烟花。历史数据不足时会显示「飞行数据不足」。
 
 ## 构建与反馈
 
+- **0.1.51** 复用下方 Gradle 构建步骤，再运行 `python scripts/build-0.1.51.py <0.1.50.jar> fabric/build/libs/BetterBaritone-0.1.44.jar BetterBaritone-0.1.51.jar`。
 - **0.1.50** 复用下方 Gradle 构建步骤，再运行 `python scripts/build-0.1.50.py <0.1.49.jar> fabric/build/libs/BetterBaritone-0.1.44.jar BetterBaritone-0.1.50.jar`。
 - **0.1.49** 复用下方 Gradle 构建步骤，再运行 `python scripts/build-0.1.49.py <0.1.48.jar> fabric/build/libs/BetterBaritone-0.1.44.jar BetterBaritone-0.1.49.jar`。
 - **0.1.48** 复用下方 Gradle 构建步骤，再运行 `python scripts/build-0.1.48.py <0.1.47.jar> fabric/build/libs/BetterBaritone-0.1.44.jar BetterBaritone-0.1.48.jar`。
