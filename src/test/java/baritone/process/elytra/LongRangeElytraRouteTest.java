@@ -67,6 +67,22 @@ public class LongRangeElytraRouteTest {
         assertSame(shortRoute, LongRangeElytraRoute.chooseFine(START, GOAL, shortRoute, null));
     }
 
+    @Test
+    public void comparesFineGridWhenCoarseGridTakesADetour() {
+        var detour = new PathSegment(false, new long[]{ORIGIN, node(0, 40), CONTINUATION});
+        var shortcut = new PathSegment(false, new long[]{ORIGIN, GUIDE, CONTINUATION});
+        var shortDeadEnd = new PathSegment(false, new long[]{ORIGIN, node(12, 5)});
+        assertFalse(LongRangeElytraRoute.shouldTryFine(START, GOAL, detour));
+        assertTrue(LongRangeElytraRoute.shouldCheckShortcut(START, GOAL, detour));
+        assertFalse(LongRangeElytraRoute.shouldCheckShortcut(START, GOAL, shortcut));
+        assertSame(shortcut, LongRangeElytraRoute.chooseShortcut(START, GOAL, detour, shortcut));
+        assertSame(detour, LongRangeElytraRoute.chooseShortcut(START, GOAL, detour, shortDeadEnd));
+        assertSame(detour, LongRangeElytraRoute.chooseShortcut(START, GOAL, detour, null));
+
+        var complete = new PathSegment(true, detour.packed);
+        assertSame(complete, LongRangeElytraRoute.chooseShortcut(START, GOAL, complete, shortcut));
+    }
+
     private static long node(int x, int z) {
         return BetterBlockPos.serializeToLong(x, 64, z);
     }

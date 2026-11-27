@@ -106,9 +106,14 @@ public final class NetherPathfinderContext {
         return CompletableFuture.supplyAsync(() -> {
             boolean airIfFake = !Baritone.settings().elytraPredictTerrain.value;
             PathSegment original = findPath(src, dst, 1000, airIfFake, true);
-            if (LongRangeElytraRoute.shouldTryFine(src, dst, original) && !Thread.currentThread().isInterrupted()) {
-                PathSegment fine = findPath(src, dst, 1000, airIfFake, false);
-                original = LongRangeElytraRoute.chooseFine(src, dst, original, fine);
+            if (!Thread.currentThread().isInterrupted()) {
+                if (LongRangeElytraRoute.shouldTryFine(src, dst, original)) {
+                    PathSegment fine = findPath(src, dst, 1000, airIfFake, false);
+                    original = LongRangeElytraRoute.chooseFine(src, dst, original, fine);
+                } else if (LongRangeElytraRoute.shouldCheckShortcut(src, dst, original)) {
+                    PathSegment fine = findPath(src, dst, 160, airIfFake, false);
+                    original = LongRangeElytraRoute.chooseShortcut(src, dst, original, fine);
+                }
             }
             if (original == null) {
                 throw new PathCalculationException("Path calculation failed");

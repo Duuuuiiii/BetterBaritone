@@ -36,6 +36,22 @@ final class LongRangeElytraRoute {
                 && progress(start, goal, coarse) < 16;
     }
 
+    static boolean shouldCheckShortcut(BlockPos start, BlockPos goal, PathSegment coarse) {
+        return horizontalDistance(start.getCenter(), goal.getCenter()) >= 16
+                && efficiency(start, goal, coarse.packed) < 0.85;
+    }
+
+    static PathSegment chooseShortcut(BlockPos start, BlockPos goal, PathSegment coarse, PathSegment fine) {
+        if (fine == null || fine.packed.length < 2 || coarse.finished && !fine.finished) {
+            return coarse;
+        }
+        if (!fine.finished && progress(start, goal, fine) < Math.min(24, progress(start, goal, coarse))) {
+            return coarse;
+        }
+        return efficiency(start, goal, fine.packed) >= efficiency(start, goal, coarse.packed) + 0.10
+                ? fine : coarse;
+    }
+
     static PathSegment chooseFine(BlockPos start, BlockPos goal, PathSegment coarse, PathSegment fine) {
         if (fine == null || fine.packed.length < 2) {
             return coarse;
